@@ -4,7 +4,7 @@ import { assertJson, canGrant, canValue, grantAdmits, isPrincipal, validateState
  * Bounded replay window. Authoritative effects, alarms, grants and audit findings are
  * never dropped; only diagnostic decisions, dedupe IDs and evidence references age out.
  */
-export const HISTORY_LIMITS = { decisions: 512, seenEvents: 1024, channelEvidence: 64 } as const;
+export const HISTORY_LIMITS = { decisions: 512, seenEvents: 1024, channelEvidence: 1024 } as const;
 const bounded = <T,>(values: T[], max: number): T[] => values.length <= max ? values : values.slice(-max);
 
 import type { Actor, AuditFinding, Channel, Decision, DispatchAction, Effect, Grant, Id, StepResult, ValidationError, VsmAction, VsmEvent, VsmState } from './types.js';

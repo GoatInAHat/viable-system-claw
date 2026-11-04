@@ -143,7 +143,7 @@ describe('canary runtime', () => {
     await runtime.start();
     for (let i = 0; i < 320; i++) await runtime.sampleOnce();
     const bytes = new TextEncoder().encode(JSON.stringify(runtime.service.state)).length;
-    expect(bytes).toBeLessThan(200 * 1024);
+    expect(bytes).toBeLessThan(350 * 1024);
     expect(runtime.service.state.decisions.length).toBeLessThanOrEqual(512);
     expect(Object.keys(runtime.service.state.seenEvents).length).toBeLessThanOrEqual(1024);
     expect(runtime.service.state.effects).toEqual({});
