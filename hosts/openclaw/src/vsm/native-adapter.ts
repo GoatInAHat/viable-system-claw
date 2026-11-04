@@ -10,7 +10,8 @@ import type { Id } from './types.js';
 export interface NativeAdapterOptions {
   executor: EffectExecutor;
   /** Returns undefined only when no launch can be formed; nothing has been sent yet. */
-  resolveIntent: (request: DispatchRequest) => Omit<EffectIntent, 'id' | 'unitId' | 'procedureId' | 'grantRef'> | undefined;
+  resolveIntent: (request: DispatchRequest) => Omit<EffectIntent, 'id' | 'unitId' | 'procedureId' | 'grantRef'> | undefined
+    | Promise<Omit<EffectIntent, 'id' | 'unitId' | 'procedureId' | 'grantRef'> | undefined>;
   /** Reconstructs persisted receipt identity after restart; undefined means unknown. */
   resolveReceipt?: (request: ReconcileRequest) => EffectReceipt | undefined;
   /** Optional environment evidence for a terminal outcome; null keeps the brake closed. */
@@ -22,7 +23,7 @@ export function createNativeExecutor(options: NativeAdapterOptions): NativeExecu
   const now = options.now ?? Date.now;
   return {
     async dispatch(request: DispatchRequest): Promise<ExecutionResult> {
-      const resolved = options.resolveIntent(request);
+      const resolved = await options.resolveIntent(request);
       if (!resolved) return { status: 'not-launched' };
       const intent: EffectIntent = {
         id: request.effectId,

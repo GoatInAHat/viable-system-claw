@@ -125,6 +125,54 @@ describe('durable VSM service', () => {
   });
 
 
+
+  it('commits the private launch intent before calling the executor', async () => {
+    const store = new MemoryStore();
+    await bootstrapDocument(store, ready());
+    const order: string[] = [];
+    const executor: NativeExecutor = {
+      async dispatch() { order.push('dispatch'); return { status: 'accepted', nativeId: 'run-1' }; },
+      async reconcile() { return { status: 'unknown' }; },
+    };
+    const service = new VsmService({
+      store, executor, clock: () => 100,
+      markIntent: async request => {
+        order.push('mark');
+        return {
+          id: request.effectId, unitId: request.unitId, procedureId: request.procedureId,
+          agentId: 'canary', message: 'Report host health.', purpose: 'canary probe',
+          grantRef: `${request.grant.id}@${request.grant.version}`, createdAt: 100,
+        };
+      },
+    });
+    await service.start();
+    await service.apply(obs('fire'));
+    expect(order).toEqual(['mark', 'dispatch']);
+    expect(service.state.effects[Object.keys(service.state.effects)[0]].status).toBe('accepted');
+  });
+
+  it('records a missing intent as lost and a storage fault as ambiguous', async () => {
+    const store = new MemoryStore();
+    await bootstrapDocument(store, ready());
+    const { calls, executor } = fakeExecutor();
+    const missing = new VsmService({ store, executor, clock: () => 100, markIntent: async () => undefined });
+    await missing.start();
+    await missing.apply(obs('fire'));
+    const missingId = Object.keys(missing.state.effects)[0];
+    expect(missing.state.effects[missingId].status).toBe('lost');
+    expect(calls.dispatch).toBe(0);
+
+    const store2 = new MemoryStore();
+    await bootstrapDocument(store2, ready());
+    const failing = new VsmService({
+      store: store2, executor: fakeExecutor().executor, clock: () => 100,
+      markIntent: async () => { throw new Error('STORAGE_DOWN'); },
+    });
+    await failing.start();
+    await failing.apply(obs('fire'));
+    expect(failing.state.effects[Object.keys(failing.state.effects)[0]].status).toBe('ambiguous');
+  });
+
   it('closes the loop: outcome plus environment return re-arms the channel for a second effect', async () => {
     const store = new MemoryStore();
     await bootstrapDocument(store, ready());

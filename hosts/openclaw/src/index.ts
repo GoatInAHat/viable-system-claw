@@ -43,8 +43,12 @@ const plugin = defineFeaturePlugin({
     if (runtimeConfig) {
       const clock = () => Date.now();
       const vsmStore = api.runtime.state.openKeyedStoreV2({ namespace: 'vsm', retention: 'retained' });
+      const privateStore = runtimeConfig.agentId
+        ? api.runtime.state.openKeyedStoreV2({ namespace: 'vsm-private', retention: 'retained' })
+        : undefined;
       const runtime = buildRuntime({
-        config: runtimeConfig, store: vsmStore, executor: nativeExecutorFor(api, clock), clock,
+        config: runtimeConfig, store: vsmStore, privateStore, clock,
+        executor: nativeExecutorFor(api, clock, { privateStore, agentId: runtimeConfig.agentId }),
         onAlarm: action => api.logger.warn(`VSC alarm ${action.alarmId} raised for ${action.principalId}`),
       });
       api.registerService({

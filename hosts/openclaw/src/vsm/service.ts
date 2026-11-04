@@ -3,6 +3,7 @@ import { dispatchRequest, executionEvents, reconcileRequest,
 import { step } from './runtime.js';
 import { changeDocument, readDocument, VSM_DOCUMENT_KEY, VSM_MAX_ATTEMPTS,
   type DocumentStore, type VsmDocument } from './state.js';
+import type { EffectIntent } from '../execution/types.js';
 import type { ValidationError, VsmAction, VsmEvent, VsmState } from './types.js';
 
 export interface VsmServiceOptions {
@@ -10,6 +11,11 @@ export interface VsmServiceOptions {
   executor: NativeExecutor;
   /** Monotonic host processing time in milliseconds. */
   clock?: () => number;
+  /**
+   * Commits the private launch intent before dispatch. Undefined means no launch can be
+   * formed; a thrown storage fault means admission is unknown, never absent.
+   */
+  markIntent?: (request: ReturnType<typeof dispatchRequest>, state: VsmState) => Promise<EffectIntent | undefined>;
   /** Direct root S5 alarm path; never routed through channel filters. */
   alarmSink?: (action: Extract<VsmAction, { type: 'alarm' }>, state: VsmState) => void;
   auditSink?: (action: Extract<VsmAction, { type: 'audit' }>, state: VsmState) => void;
@@ -128,6 +134,19 @@ export class VsmService {
     if (!this.document) throw new Error('VSC_VSM_NOT_STARTED');
     // Intent and reservation are already durable before this call.
     const request = dispatchRequest(this.document.state, effectId, this.now());
+    if (this.options.markIntent) {
+      let intent: EffectIntent | undefined;
+      try {
+        intent = await this.options.markIntent(request, this.document.state);
+      } catch {
+        await this.applyExecution(effectId, { status: 'unknown' }, `intent/${request.effectId}`);
+        return;
+      }
+      if (!intent) {
+        await this.applyExecution(effectId, { status: 'not-launched' }, `intent/${request.effectId}`);
+        return;
+      }
+    }
     let result: ExecutionResult;
     try {
       result = await this.options.executor.dispatch(request);

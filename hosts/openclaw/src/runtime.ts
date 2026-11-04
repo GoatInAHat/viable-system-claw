@@ -1,18 +1,20 @@
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk/core';
 import { NativeEffectExecutor } from './execution/native.js';
-import { addUnit, configureChannel, createState } from './vsm/kernel.js';
+import { addProcedure, addUnit, configureChannel, createState } from './vsm/kernel.js';
 import { createNativeExecutor } from './vsm/native-adapter.js';
 import { VsmService } from './vsm/service.js';
-import { bootstrapDocument, readDocument, VSM_DOCUMENT_KEY, type DocumentStore } from './vsm/state.js';
+import { step } from './vsm/runtime.js';
+import { bootstrapDocument, changeDocument, readDocument, VSM_DOCUMENT_KEY, type DocumentStore } from './vsm/state.js';
+import { readIntent, writeIntent } from './vsm/intent-store.js';
 import { CANARY_THRESHOLDS, canaryObservations, sampleCanary, type CanarySample } from './vsm/canary.js';
 import type { NativeExecutor } from './vsm/executor.js';
 import type { VsmAction, VsmState } from './vsm/types.js';
 
-
-
 export interface VsmRuntimeConfig {
   principalId: string;
   charter: string;
+  /** When set, the canary gains one natively dispatched probe procedure. */
+  agentId?: string;
 }
 
 /**
@@ -28,6 +30,7 @@ export function readRuntimeConfig(
     enabled: env.VSC_RUNTIME_ENABLED === '1',
     principalId: env.VSC_RUNTIME_PRINCIPAL_ID,
     charter: env.VSC_RUNTIME_CHARTER,
+    agentId: env.VSC_RUNTIME_AGENT_ID,
   };
   if (runtime === undefined) return undefined;
   if (typeof runtime !== 'object' || runtime === null || Array.isArray(runtime)) throw new Error('VSC_RUNTIME_CONFIG');
@@ -37,24 +40,34 @@ export function readRuntimeConfig(
   const charter = record.charter;
   if (typeof principalId !== 'string' || principalId.trim().length === 0) throw new Error('VSC_RUNTIME_CONFIG');
   if (typeof charter !== 'string' || charter.trim().length === 0) throw new Error('VSC_RUNTIME_CONFIG');
-  return { principalId, charter };
+  const agentId = record.agentId;
+  if (agentId !== undefined && (typeof agentId !== 'string' || !/^[a-z0-9][a-z0-9_-]*$/.test(agentId))) {
+    throw new Error('VSC_RUNTIME_CONFIG');
+  }
+  return { principalId, charter, ...(agentId === undefined ? {} : { agentId }) };
 }
 
 export const CANARY_CHANNEL = 'canary/environment/return';
+export const DISPATCH_CHANNEL = 'canary/local/forward';
+export const PROBE_PROCEDURE = 'canary/probe';
 export const CANARY_INTERVAL_MS = 30_000;
 
 export interface VsmRuntimeOptions {
   config: VsmRuntimeConfig;
   store: DocumentStore;
   executor: NativeExecutor;
+  privateStore?: DocumentStore;
   clock?: () => number;
   sampler?: (now: number) => Promise<CanarySample>;
   onAlarm?: (action: Extract<VsmAction, { type: 'alarm' }>, state: VsmState) => void;
   intervalMs?: number;
+  channelId?: string;
+  readyzUrl?: string;
 }
 
 export interface VsmRuntime {
   service: VsmService;
+  channelId: string;
   start(): Promise<void>;
   stop(): Promise<void>;
   sampleOnce(): Promise<void>;
@@ -63,14 +76,33 @@ export interface VsmRuntime {
 export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
   const clock = options.clock ?? Date.now;
   const sampler = options.sampler ?? ((now: number) => sampleCanary({
-    now, readyzUrl: 'http://127.0.0.1:18789/readyz', filesystemPath: process.cwd(),
+    now, readyzUrl: options.readyzUrl ?? process.env.VSC_RUNTIME_READYZ_URL ?? 'http://127.0.0.1:18789/readyz',
+    filesystemPath: process.cwd(),
   }));
+  const channelId = options.channelId ?? (options.config.agentId ? DISPATCH_CHANNEL : CANARY_CHANNEL);
   const service = new VsmService({
     store: options.store,
     executor: options.executor,
     clock,
     alarmSink: options.onAlarm,
     log: { warn: () => undefined },
+    ...(options.privateStore && options.config.agentId ? {
+      markIntent: async (request, state) => {
+        const procedure = state.procedures[request.procedureId];
+        const intent = {
+          id: request.effectId,
+          unitId: request.unitId,
+          procedureId: request.procedureId,
+          agentId: options.config.agentId!,
+          message: `Observe host health for ${request.effectId}. Reply with one short status line and no file changes.`,
+          purpose: procedure?.executionRef ?? 'canary probe',
+          grantRef: `${request.grant.id}@${request.grant.version}`,
+          createdAt: clock(),
+        };
+        await writeIntent(options.privateStore!, intent);
+        return intent;
+      },
+    } : {}),
   });
   let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -81,7 +113,7 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
       await service.apply({
         id: `canary/${sample.at}/${observation.topic}/${observation.index}`,
         type: 'observation',
-        channelId: CANARY_CHANNEL,
+        channelId,
         index: observation.index,
         evidence: observation.evidence,
         topic: observation.topic,
@@ -92,6 +124,7 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
 
   return {
     service,
+    channelId,
     async start() {
       await service.start();
       if (timer === null && (options.intervalMs ?? CANARY_INTERVAL_MS) > 0) {
@@ -107,21 +140,93 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
 }
 
 /** Root document creation is external/bootstrap-only, never an agent mutation. */
-export async function ensureRootState(store: DocumentStore, config: VsmRuntimeConfig, now: number): Promise<void> {
+export async function ensureRootState(
+  store: DocumentStore, config: VsmRuntimeConfig, now: number,
+): Promise<void> {
   const observed = await store.observe(VSM_DOCUMENT_KEY);
-  if (readDocument(observed.value)) return;
-  let state = createState({ rootId: 'root', principalId: config.principalId, charter: config.charter, now });
-  state = addUnit(state, { id: 'canary', parentId: 'root', purpose: 'Keep the host observable', exits: { observed: 1 } });
-  state = configureChannel(state, CANARY_CHANNEL, { threshold: 2.5 });
-  await bootstrapDocument(store, state);
+  const existing = readDocument(observed.value);
+  if (!existing) {
+    let state = createState({ rootId: 'root', principalId: config.principalId, charter: config.charter, now });
+    state = addUnit(state, { id: 'canary', parentId: 'root', purpose: 'Keep the host observable', exits: { observed: 1 } });
+    state = withProbe(state, config, now);
+    await bootstrapDocument(store, seedChannels(state, config));
+    return;
+  }
+  const state = existing.state;
+  if (config.agentId && !state.procedures[PROBE_PROCEDURE]) {
+    const decided = withProbeGrant(configureChannel(addProcedure(structuredClone(state), probeProcedure(config)),
+      DISPATCH_CHANNEL, { procedureId: PROBE_PROCEDURE, threshold: 2.5 }), now);
+    const written = await changeDocument(store, next => {
+      if (next.revision !== state.revision) return false;
+      for (const key of Object.keys(next)) delete (next as unknown as Record<string, unknown>)[key];
+      Object.assign(next, structuredClone(decided));
+      return true;
+    });
+    if (!written.changed) throw new Error('VSC_RUNTIME_BOOTSTRAP_CONFLICT');
+    return;
+  }
+  if (config.agentId && state.procedures[PROBE_PROCEDURE]?.executionRef !== `agent:${config.agentId}`) {
+    throw new Error('VSC_RUNTIME_AGENT_CHANGED');
+  }
 }
 
-export function nativeExecutorFor(api: OpenClawPluginApi, clock: () => number) {
+function probeProcedure(config: VsmRuntimeConfig) {
+  return {
+    id: PROBE_PROCEDURE, unitId: 'canary', organ: 'operation' as const, kind: 'model' as const,
+    executionRef: `agent:${config.agentId}`, expectedOutcome: 1, returnTimeoutMs: 120_000,
+    requiredTools: [] as string[], requiredSurfaces: [] as string[],
+  };
+}
+
+export const PROBE_GRANT = 'canary/probe-grant';
+
+/** The probe procedure needs an explicit, expiring, revocable grant from root S3. */
+function withProbeGrant(state: VsmState, now: number): VsmState {
+  if (state.grants[PROBE_GRANT]) return state;
+  const result = step(state, {
+    id: `grant/${PROBE_GRANT}/${now}`,
+    type: 'grant.changed',
+    actor: { kind: 'organ', unitId: 'root', role: 'S3' },
+    grant: {
+      id: PROBE_GRANT, version: 1, unitId: 'canary', issuer: { kind: 'organ', unitId: 'root', role: 'S3' },
+      procedureIds: [PROBE_PROCEDURE], tools: [], surfaces: [], capacity: 2,
+      validFrom: now, validUntil: now + 10 * 365 * 24 * 60 * 60 * 1000, revokedAt: null,
+    },
+  }, now);
+  if (result.errors.length) throw new Error(`VSC_RUNTIME_GRANT:${result.errors[0].code}`);
+  return result.state;
+}
+
+function withProbe(state: VsmState, config: VsmRuntimeConfig, now: number): VsmState {
+  return config.agentId ? withProbeGrant(addProcedure(state, probeProcedure(config)), now) : state;
+}
+
+function seedChannels(state: VsmState, config: VsmRuntimeConfig): VsmState {
+  return config.agentId
+    ? configureChannel(state, DISPATCH_CHANNEL, { procedureId: PROBE_PROCEDURE, threshold: 2.5 })
+    : configureChannel(state, CANARY_CHANNEL, { threshold: 2.5 });
+}
+
+export function nativeExecutorFor(
+  api: OpenClawPluginApi, clock: () => number, options: {
+    privateStore?: DocumentStore;
+    agentId?: string;
+  } = {},
+): NativeExecutor {
   return createNativeExecutor({
-    executor: new NativeEffectExecutor(api, { agentExists: () => false, now: clock }),
-    // No non-kernel procedure is admitted yet; a dispatch without a host intent
-    // is recorded as not-launched rather than guessed.
-    resolveIntent: () => undefined,
+    executor: new NativeEffectExecutor(api, {
+      // The operator names the agent explicitly; the native runtime still rejects a
+      // missing agent when the launch is attempted.
+      agentExists: id => options.agentId !== undefined && id === options.agentId,
+      now: clock,
+    }),
+    resolveIntent: async request => {
+      if (!options.privateStore) return undefined;
+      const intent = await readIntent(options.privateStore, request.effectId);
+      if (!intent) return undefined;
+      return { agentId: intent.agentId, message: intent.message, purpose: intent.purpose, createdAt: intent.createdAt,
+        ...(intent.deadline === undefined ? {} : { deadline: intent.deadline }) };
+    },
     now: clock,
   });
 }

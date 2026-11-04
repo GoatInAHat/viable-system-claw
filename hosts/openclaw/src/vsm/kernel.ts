@@ -1,5 +1,5 @@
 import { ORGAN_ROLES } from './types.js';
-import type { Actor, Channel, ChannelKind, Endpoint, Grant, Id, Json, OrganRole, ValidationError, VsmState, VsmUnit } from './types.js';
+import type { Actor, Channel, ChannelKind, Endpoint, Grant, Id, Json, OrganRole, Procedure, ValidationError, VsmState, VsmUnit } from './types.js';
 
 const safeId = (id: string): boolean => /^[A-Za-z0-9][A-Za-z0-9._:/@*-]{0,199}$/.test(id) && !['__proto__', 'constructor', 'prototype'].includes(id);
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
@@ -104,6 +104,28 @@ export function addUnit(state: VsmState, input: UnitInput): VsmState {
 export function connectHomeostat(state: VsmState, input: HomeostatInput): VsmState {
   const next = structuredClone(state);
   addLoop(next, input, state.updatedAt);
+  next.revision++;
+  assertValid(next, state);
+  return next;
+}
+export interface ProcedureInput {
+  id: Id; unitId: Id; organ: OrganRole; kind: Procedure['kind']; executionRef: string;
+  expectedOutcome?: number; returnTimeoutMs?: number; requiredTools?: string[]; requiredSurfaces?: string[];
+}
+/** External/bootstrap helper. Agents never call this through a tool surface. */
+export function addProcedure(state: VsmState, input: ProcedureInput): VsmState {
+  const unit = state.units[input.unitId];
+  if (!unit) throw new Error('PROCEDURE_UNIT');
+  if (state.procedures[input.id]) throw new Error('DUPLICATE_PROCEDURE');
+  if (state.procedures[input.id] && state.procedures[input.id].kernel) throw new Error('KERNEL_IMMUTABLE');
+  const next = structuredClone(state);
+  next.procedures[input.id] = {
+    id: input.id, unitId: input.unitId, organ: input.organ, version: 1, kind: input.kind,
+    executionRef: input.executionRef, kernel: false,
+    expectedOutcome: input.expectedOutcome ?? 1, returnTimeoutMs: input.returnTimeoutMs ?? 60_000,
+    requiredTools: [...(input.requiredTools ?? [])], requiredSurfaces: [...(input.requiredSurfaces ?? [])],
+  };
+  next.units[input.unitId].organs[input.organ].procedureIds.push(input.id);
   next.revision++;
   assertValid(next, state);
   return next;

@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { buildRuntime, CANARY_CHANNEL, ensureRootState, readRuntimeConfig } from './runtime.js';
+import { buildRuntime, CANARY_CHANNEL, DISPATCH_CHANNEL, PROBE_PROCEDURE, ensureRootState, readRuntimeConfig } from './runtime.js';
 import { readDocument, type DocumentStore } from './vsm/state.js';
+import { intentKey } from './vsm/intent-store.js';
 import type { NativeExecutor } from './vsm/executor.js';
+import type { DispatchRequest } from './vsm/executor.js';
 
 class MemoryStore implements DocumentStore {
-  value: unknown = undefined;
-  version = 0;
-  async observe(_key: string) { return { value: structuredClone(this.value), comparison: { version: this.version } }; }
-  async compareAndApply(_key: string, comparison: unknown, mutation: { operation: 'update'; action: 'set'; value: unknown }) {
-    if ((comparison as { version: number }).version !== this.version) return { status: 'conflict' as const };
-    this.value = structuredClone(mutation.value); this.version++;
+  data = new Map<string, unknown>();
+  async observe(key: string) { return { value: structuredClone(this.data.get(key)), comparison: { key } }; }
+  async compareAndApply(key: string, _comparison: unknown, mutation: { operation: 'update'; action: 'set'; value: unknown }) {
+    this.data.set(key, structuredClone(mutation.value));
     return { status: 'applied' as const };
   }
 }
@@ -25,6 +25,14 @@ const healthy = async () => ({
   disk: { usedRatio: 0.4 },
   inodes: { usedRatio: 0.2 },
 });
+const faulty = async () => ({
+  at: 100,
+  readyz: { status: null, latencyMs: null, error: true },
+  disk: { usedRatio: 0.99 },
+  inodes: { usedRatio: 0.99 },
+});
+
+const base = { principalId: 'human', charter: 'Keep it observable' };
 
 describe('runtime configuration', () => {
   it('adds no behavior unless runtime.enabled is exactly true', () => {
@@ -48,30 +56,53 @@ describe('runtime configuration', () => {
     expect(() => readRuntimeConfig({ runtime: { enabled: true, principalId: 'human', charter: ' ' } })).toThrow('VSC_RUNTIME_CONFIG');
   });
 
-  it('returns the validated pair when enabled', () => {
-    expect(readRuntimeConfig({ runtime: { enabled: true, principalId: 'human', charter: 'Keep it observable' } }))
-      .toEqual({ principalId: 'human', charter: 'Keep it observable' });
+  it('validates an optional dispatch agent id', () => {
+    expect(readRuntimeConfig({ runtime: { enabled: true, principalId: 'human', charter: 'x', agentId: 'canary' } }))
+      .toEqual({ principalId: 'human', charter: 'x', agentId: 'canary' });
+    expect(() => readRuntimeConfig({ runtime: { enabled: true, principalId: 'human', charter: 'x', agentId: 'Bad Agent' } }))
+      .toThrow('VSC_RUNTIME_CONFIG');
   });
 });
 
 describe('root bootstrap', () => {
   it('creates the root and canary unit once', async () => {
     const store = new MemoryStore();
-    await ensureRootState(store, { principalId: 'human', charter: 'Keep it observable' }, 10);
-    const first = readDocument(store.value);
+    await ensureRootState(store, base, 10);
+    const first = readDocument(store.data.get('vsm-v1'));
     expect(first?.state.units.root.parentId).toBeNull();
     expect(first?.state.units.canary.parentId).toBe('root');
     expect(first?.state.channels[CANARY_CHANNEL].procedureId).toBeNull();
-    await ensureRootState(store, { principalId: 'human', charter: 'Changed' }, 20);
-    expect(readDocument(store.value)?.state.charter.text).toBe('Keep it observable');
+    await ensureRootState(store, { ...base, charter: 'Changed' }, 20);
+    expect(readDocument(store.data.get('vsm-v1'))?.state.charter.text).toBe('Keep it observable');
+  });
+
+  it('adds the probe procedure exactly once and refuses an agent change', async () => {
+    const store = new MemoryStore();
+    await ensureRootState(store, { ...base, agentId: 'canary' }, 10);
+    let document = readDocument(store.data.get('vsm-v1'));
+    expect(document?.state.procedures[PROBE_PROCEDURE].executionRef).toBe('agent:canary');
+    expect(document?.state.channels[DISPATCH_CHANNEL].procedureId).toBe(PROBE_PROCEDURE);
+    await ensureRootState(store, { ...base, agentId: 'canary' }, 20);
+    document = readDocument(store.data.get('vsm-v1'));
+    expect(document?.state.procedures[PROBE_PROCEDURE].executionRef).toBe('agent:canary');
+    await expect(ensureRootState(store, { ...base, agentId: 'other' }, 30)).rejects.toThrow('VSC_RUNTIME_AGENT_CHANGED');
+  });
+
+  it('upgrades an existing canary document with the probe without a second root', async () => {
+    const store = new MemoryStore();
+    await ensureRootState(store, base, 10);
+    await ensureRootState(store, { ...base, agentId: 'canary' }, 20);
+    const document = readDocument(store.data.get('vsm-v1'));
+    expect(Object.keys(document!.state.units).sort()).toEqual(['canary', 'root']);
+    expect(document?.state.procedures[PROBE_PROCEDURE]).toBeDefined();
   });
 });
 
 describe('canary runtime', () => {
   it('applies one bounded observation per measured variable and stops cleanly', async () => {
     const store = new MemoryStore();
-    await ensureRootState(store, { principalId: 'human', charter: 'Keep it observable' }, 10);
-    const runtime = buildRuntime({ config: { principalId: 'human', charter: 'Keep it observable' }, store, executor, clock: () => 100, sampler: healthy });
+    await ensureRootState(store, base, 10);
+    const runtime = buildRuntime({ config: base, store, executor, clock: () => 100, sampler: healthy });
     await runtime.start();
     await runtime.sampleOnce();
     const channel = runtime.service.state.channels[CANARY_CHANNEL];
@@ -84,23 +115,42 @@ describe('canary runtime', () => {
 
   it('does not dispatch when the canary has no executable procedure', async () => {
     const store = new MemoryStore();
-    await ensureRootState(store, { principalId: 'human', charter: 'Keep it observable' }, 10);
+    await ensureRootState(store, base, 10);
     let dispatches = 0;
     const counting: NativeExecutor = {
       async dispatch() { dispatches++; return { status: 'not-launched' }; },
       async reconcile() { return { status: 'unknown' }; },
     };
-    const runtime = buildRuntime({
-      config: { principalId: 'human', charter: 'Keep it observable' }, store, executor: counting,
-      clock: () => 100, sampler: async () => ({
-        at: 100, readyz: { status: null, latencyMs: null, error: true },
-        disk: { usedRatio: 0.99 }, inodes: { usedRatio: 0.99 },
-      }),
-    });
+    const runtime = buildRuntime({ config: base, store, executor: counting, clock: () => 100, sampler: faulty });
     await runtime.start();
     await runtime.sampleOnce();
     expect(dispatches).toBe(0);
     expect(runtime.service.state.effects).toEqual({});
+    await runtime.stop();
+  });
+
+  it('commits a private intent and dispatches the probe when a fault crosses the threshold', async () => {
+    const store = new MemoryStore();
+    const privateStore = new MemoryStore();
+    const config = { ...base, agentId: 'canary' };
+    await ensureRootState(store, config, 10);
+    const requests: DispatchRequest[] = [];
+    const dispatching: NativeExecutor = {
+      async dispatch(request) { requests.push(request); return { status: 'accepted', nativeId: 'run-probe-1' }; },
+      async reconcile() { return { status: 'unknown' }; },
+    };
+    const runtime = buildRuntime({
+      config, store, privateStore, executor: dispatching, clock: () => 100, sampler: faulty,
+    });
+    await runtime.start();
+    await runtime.sampleOnce();
+    expect(requests).toHaveLength(1);
+    expect(requests[0].procedureId).toBe(PROBE_PROCEDURE);
+    const effectId = requests[0].effectId;
+    expect(runtime.service.state.effects[effectId].status).toBe('accepted');
+    const intent = privateStore.data.get(intentKey(effectId)) as { agentId: string; message: string } | undefined;
+    expect(intent?.agentId).toBe('canary');
+    expect(intent?.message).toContain(effectId);
     await runtime.stop();
   });
 });
