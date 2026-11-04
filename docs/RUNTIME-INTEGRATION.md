@@ -1,6 +1,6 @@
 # Runtime integration boundary
 
-Status: **kernel, durable state, service and native adapter implemented; not wired or cut over.** Synthetic tests cover restart, CAS conflict, duplicate events, ambiguous launches and the alarm bypass. The canary purpose is read-only. Gateway registration, the disposable-Gateway qualification and any live purpose remain open.
+Status: **kernel, durable state, service, native adapter and opt-in Gateway registration implemented.** Synthetic tests and a disposable-Gateway restart are recorded in `docs/QUALIFICATION.md`. The canary purpose is read-only. Production cutover, alarm delivery, a runtime UI and any natively dispatched purpose remain open.
 
 ## Durable state
 
