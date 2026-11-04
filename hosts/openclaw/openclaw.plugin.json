@@ -1,17 +1,51 @@
 {
   "id": "viable-system-claw",
   "name": "Viable System Claw",
-  "description": "A recursive organization and adaptive compute allocator for OpenClaw.",
+  "description": "Explicit organizational graph, metadata activity projection and compute observations.",
   "version": "0.1.0",
   "configSchema": {
     "type": "object",
-    "properties": {},
-    "additionalProperties": false
+    "additionalProperties": false,
+    "properties": {}
   },
   "activation": {
     "onStartup": true
   },
+  "controlUi": {
+    "entry": "dist/control-ui/a2730897f9e977512492b8ffb6f5bce551847061e32a5a31302bee5f649e8808/index.js"
+  },
   "contracts": {
-    "tools": []
+    "tools": [
+      "vsc_compute_observe",
+      "vsc_compute_plan",
+      "vsc_compute_snapshot",
+      "vsc_graph_snapshot",
+      "vsc_relation_upsert",
+      "vsc_unit_bind_session",
+      "vsc_unit_upsert"
+    ]
+  },
+  "toolMetadata": {
+    "vsc_compute_observe": {
+      "optional": true
+    },
+    "vsc_compute_plan": {
+      "optional": true
+    },
+    "vsc_compute_snapshot": {
+      "optional": true
+    },
+    "vsc_graph_snapshot": {
+      "optional": true
+    },
+    "vsc_relation_upsert": {
+      "optional": true
+    },
+    "vsc_unit_bind_session": {
+      "optional": true
+    },
+    "vsc_unit_upsert": {
+      "optional": true
+    }
   }
 }

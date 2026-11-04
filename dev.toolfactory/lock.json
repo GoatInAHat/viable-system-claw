@@ -119,11 +119,7 @@
     },
     "package.json": {
       "sha256": "9761c5ceed9e12e4a7af93cf78da876bcf10b523a76a953a3bb1bed3dff76d1c",
-      "state": "generated",
-      "keys": [
-        "type",
-        "files"
-      ]
+      "state": "manual"
     },
     "README.md": {
       "sha256": "03eaaf8f217ec4b6ba10f98281ebb5ebad736ce0b472c0e72f33e08f6c2d63b8",

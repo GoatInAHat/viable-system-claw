@@ -1,8 +1,6 @@
-import { defineConfig } from "vitest/config";
-
+import { defineConfig } from 'vitest/config';
+import { fileURLToPath } from 'node:url';
 export default defineConfig({
-  test: {
-    environment: "node",
-    include: ["src/**/*.test.ts"],
-  },
+  root: fileURLToPath(new URL('.', import.meta.url)),
+  test: { environment: 'node', include: ['src/**/*.test.ts'], maxWorkers: 1 },
 });

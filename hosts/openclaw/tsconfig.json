@@ -7,9 +7,21 @@
     "declaration": true,
     "outDir": "dist",
     "skipLibCheck": true,
-    "noEmitOnError": true
+    "noEmitOnError": true,
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "node"
+    ],
+    "rootDir": "src"
   },
   "include": [
     "src/**/*.ts"
+  ],
+  "exclude": [
+    "src/**/*.test.ts"
   ]
 }

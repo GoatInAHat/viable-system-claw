@@ -8,25 +8,23 @@
   ],
   "type": "module",
   "engines": {
-    "node": ">=22.12"
+    "node": ">=24.22.1"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests",
-    "test:live": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run tests/live.test.ts"
+    "build": "npm --prefix hosts/openclaw run build",
+    "check": "tsc -p hosts/openclaw/tsconfig.check.json",
+    "test": "vitest run --config hosts/openclaw/vitest.config.ts",
+    "build:ui": "npm --prefix hosts/openclaw run plugin:build",
+    "validate": "npm --prefix hosts/openclaw run plugin:validate"
   },
-  "dependencies": {
-    "@modelcontextprotocol/node": "^2.0.0",
-    "@modelcontextprotocol/server": "^2.0.0",
-    "commander": "^15.0.0",
-    "zod": "^4.0.0"
-  },
+  "dependencies": {},
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "toolfactory": "^0.2.1",
-    "tsx": "^4.0.0",
-    "typescript": "^6.0.0",
-    "vitest": "^4.0.0"
+    "@types/node": "^24.0.0",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0",
+    "esbuild": "0.28.2",
+    "happy-dom": "21.0.4",
+    "typebox": "1.3.35"
   },
   "files": [
     "dist",
@@ -34,5 +32,6 @@
     "schemas",
     "README.md",
     "LICENSE"
-  ]
+  ],
+  "private": true
 }
