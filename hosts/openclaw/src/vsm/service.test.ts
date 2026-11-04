@@ -124,6 +124,49 @@ describe('durable VSM service', () => {
     expect(dispatches).toBe(1);
   });
 
+
+  it('closes the loop: outcome plus environment return re-arms the channel for a second effect', async () => {
+    const store = new MemoryStore();
+    await bootstrapDocument(store, ready());
+    const { fake, calls, executor } = fakeExecutor();
+    const service = new VsmService({ store, executor, clock: () => 100 });
+    await service.start();
+    await service.apply(obs('fire'));
+    const first = Object.keys(service.state.effects)[0];
+    expect(service.state.effects[first].status).toBe('accepted');
+    fake.state = fakeComplete(fake.state, first, { value: 1, evidenceRef: 'evidence:one', at: 110 }, true, 'evidence:env-one');
+    await service.apply({ id: 'recover', type: 'restart' });
+    expect(service.state.effects[first].status).toBe('succeeded');
+    expect(service.state.effects[first].environmentReturn?.evidenceRef).toBe('evidence:env-one');
+    await service.apply(obs('fire-again'));
+    const second = Object.keys(service.state.effects).find(id => id !== first)!;
+    expect(second).toBeDefined();
+    expect(service.state.effects[second].sequence).toBe(2);
+    expect(service.state.effects[second].status).toBe('accepted');
+    expect(calls.dispatch).toBe(2);
+  });
+
+  it('keeps the grant brake closed after revocation, without cancelling accepted work', async () => {
+    const store = new MemoryStore();
+    await bootstrapDocument(store, ready());
+    const { fake, calls, executor } = fakeExecutor();
+    const service = new VsmService({ store, executor, clock: () => 100 });
+    await service.start();
+    await service.apply(obs('fire'));
+    const effectId = Object.keys(service.state.effects)[0];
+    fake.state = fakeComplete(fake.state, effectId, { value: 1, evidenceRef: 'evidence:one', at: 110 }, true, 'evidence:env-one');
+    await service.apply({ id: 'recover', type: 'restart' });
+    expect(service.state.effects[effectId].status).toBe('succeeded');
+    await service.apply({ id: 'revoke', type: 'grant.revoked', actor: parent, grantId: 'g', version: 2 });
+    await service.apply(obs('fire-again'));
+    expect(Object.keys(service.state.effects)).toEqual([effectId]);
+    expect(calls.dispatch).toBe(1);
+    const last = service.state.decisions.at(-1)!;
+    expect(last.evidence).toBe(true);
+    expect(last.environment).toBe(true);
+    expect(last.grant).toBe(false);
+  });
+
   it('calls the alarm sink without passing channel filters', async () => {
     const store = new MemoryStore();
     await bootstrapDocument(store, ready());
