@@ -54,17 +54,37 @@ const plugin = defineFeaturePlugin({
         config: runtimeConfig, store: vsmStore, privateStore, clock,
         executor: nativeExecutorFor(api, clock, {
           store: vsmStore, privateStore, agentId: runtimeConfig.agentId,
+          privateResultSink: {
+            write: async result => {
+              const observed = await privateStore!.observe(result.ref);
+              if (observed.value !== undefined) return;
+              await privateStore!.compareAndApply(result.ref, observed.comparison,
+                { operation: 'update', action: 'set', value: {
+                  effectId: result.effectId, runId: result.runId, sessionKey: result.sessionKey,
+                  messages: result.messages, terminalReply: result.terminalReply ?? null,
+                  truncated: result.truncated, storedAt: Date.now(),
+                } });
+            },
+          },
           log: detail => api.logger.warn(`VSC native dispatch ${detail}`),
         }),
         onChange: (revision, updatedAt) => events.emit('vsm', { revision, updatedAt }),
-        onAlarm: (action, state) => {
-          const alarm = state.alarms[action.alarmId];
-          api.logger.warn(`VSC alarm ${action.alarmId} raised for ${action.principalId}`);
-          if (alarm) events.emit('alarm', {
-            alarmId: alarm.id, unitId: alarm.unitId, alarmClass: alarm.class,
-            severity: alarm.severity, at: alarm.raisedAt ?? alarm.acknowledgedAt ?? 0,
-          });
-        },
+        onAlarm: (() => {
+          // Restart passes re-emit unacknowledged alarms; deliver each raising once.
+          const delivered = new Set<string>();
+          return (action, state) => {
+            const alarm = state.alarms[action.alarmId];
+            if (!alarm) return;
+            const key = `${alarm.id}:${alarm.raisedAt ?? 0}`;
+            if (delivered.has(key)) return;
+            delivered.add(key);
+            api.logger.warn(`VSC alarm ${action.alarmId} raised for ${action.principalId}`);
+            events.emit('alarm', {
+              alarmId: alarm.id, unitId: alarm.unitId, alarmClass: alarm.class,
+              severity: alarm.severity, at: alarm.raisedAt ?? alarm.acknowledgedAt ?? 0,
+            });
+          };
+        })(),
         log: detail => api.logger.warn(`VSC runtime ${detail}`),
       });
       api.registerService({

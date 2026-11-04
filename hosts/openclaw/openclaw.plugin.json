@@ -12,7 +12,7 @@
     "onStartup": true
   },
   "controlUi": {
-    "entry": "dist/control-ui/abef93495d53eb86f809fe6f9bdb39816a066703df2dab718450407df889a921/index.js"
+    "entry": "dist/control-ui/174fbf00ad100b17552612884625da946976e9c367f85ab4301d1cd606e581e5/index.js"
   },
   "contracts": {
     "tools": [
@@ -22,7 +22,8 @@
       "vsc_graph_snapshot",
       "vsc_relation_upsert",
       "vsc_unit_bind_session",
-      "vsc_unit_upsert"
+      "vsc_unit_upsert",
+      "vsc_vsm_snapshot"
     ]
   },
   "toolMetadata": {
@@ -45,6 +46,9 @@
       "optional": true
     },
     "vsc_unit_upsert": {
+      "optional": true
+    },
+    "vsc_vsm_snapshot": {
       "optional": true
     }
   }

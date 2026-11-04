@@ -9,6 +9,7 @@ import { readIntent, writeIntent } from './vsm/intent-store.js';
 import { effectSessionKey } from './execution/native.js';
 import { CANARY_THRESHOLDS, canaryObservations, sampleCanary, type CanarySample } from './vsm/canary.js';
 import type { NativeExecutor } from './vsm/executor.js';
+import type { PrivateResultSink } from './execution/types.js';
 import type { VsmAction, VsmState } from './vsm/types.js';
 
 export interface VsmRuntimeConfig {
@@ -291,6 +292,7 @@ export function nativeExecutorFor(
     privateStore?: DocumentStore;
     agentId?: string;
     log?: (detail: string) => void;
+    privateResultSink?: PrivateResultSink;
   } = {},
 ): NativeExecutor {
   return createNativeExecutor({
