@@ -51,6 +51,8 @@ export const CANARY_CHANNEL = 'canary/environment/return';
 export const DISPATCH_CHANNEL = 'canary/local/forward';
 export const PROBE_PROCEDURE = 'canary/probe';
 export const CANARY_INTERVAL_MS = 30_000;
+/** Three consecutive faulted samples raise one algedonic alarm for the unit. */
+export const CANARY_FAULT_STREAK = 3;
 
 export interface VsmRuntimeOptions {
   config: VsmRuntimeConfig;
@@ -107,6 +109,7 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
     } : {}),
   });
   let timer: ReturnType<typeof setInterval> | null = null;
+  let consecutiveFaults = 0;
 
   async function reconcileOnce(): Promise<void> {
     try {
@@ -132,7 +135,10 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
   async function sampleOnce(): Promise<void> {
     const now = clock();
     const sample = await sampler(now);
-    for (const observation of canaryObservations(sample, CANARY_THRESHOLDS)) {
+    const observations = canaryObservations(sample, CANARY_THRESHOLDS);
+    let severity = 0;
+    for (const observation of observations) {
+      if (observation.evidence > 0) severity += observation.evidence;
       await service.apply({
         id: `canary/${sample.at}/${observation.topic}/${observation.index}`,
         type: 'observation',
@@ -141,6 +147,21 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
         evidence: observation.evidence,
         topic: observation.topic,
         evidenceRef: observation.evidenceRef,
+      });
+    }
+    consecutiveFaults = severity > 0 ? consecutiveFaults + 1 : 0;
+    if (consecutiveFaults >= CANARY_FAULT_STREAK && !openAlarm(service.state, 'canary.host-health')) {
+      await service.apply({
+        id: `alarm/${sample.at}`,
+        type: 'alarm.raised',
+        alarmId: `alarm/canary/${sample.at}`,
+        unitId: 'canary',
+        alarmClass: 'canary.host-health',
+        severity,
+        localThreshold: 1,
+        falseAlarmCost: 1,
+        delayCost: 10,
+        evidenceRef: observations[0]?.evidenceRef ?? `canary:${sample.at}`,
       });
     }
   }
@@ -197,6 +218,10 @@ export async function ensureRootState(
   if (config.agentId && state.procedures[PROBE_PROCEDURE]?.executionRef !== `agent:${config.agentId}`) {
     throw new Error('VSC_RUNTIME_AGENT_CHANGED');
   }
+}
+
+function openAlarm(state: VsmState, alarmClass: string): boolean {
+  return Object.values(state.alarms).some(alarm => alarm.class === alarmClass && alarm.state !== 'acknowledged');
 }
 
 function probeProcedure(config: VsmRuntimeConfig) {

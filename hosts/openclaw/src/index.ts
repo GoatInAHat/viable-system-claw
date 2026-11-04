@@ -52,7 +52,14 @@ const plugin = defineFeaturePlugin({
           store: vsmStore, privateStore, agentId: runtimeConfig.agentId,
           log: detail => api.logger.warn(`VSC native dispatch ${detail}`),
         }),
-        onAlarm: action => api.logger.warn(`VSC alarm ${action.alarmId} raised for ${action.principalId}`),
+        onAlarm: (action, state) => {
+          const alarm = state.alarms[action.alarmId];
+          api.logger.warn(`VSC alarm ${action.alarmId} raised for ${action.principalId}`);
+          if (alarm) events.emit('alarm', {
+            alarmId: alarm.id, unitId: alarm.unitId, alarmClass: alarm.class,
+            severity: alarm.severity, at: alarm.raisedAt ?? alarm.acknowledgedAt ?? 0,
+          });
+        },
         log: detail => api.logger.warn(`VSC runtime ${detail}`),
       });
       api.registerService({

@@ -130,6 +130,31 @@ describe('canary runtime', () => {
   });
 
 
+
+  it('raises one algedonic alarm after three consecutive faulted samples', async () => {
+    const store = new MemoryStore();
+    await ensureRootState(store, base, 10);
+    let t = 100;
+    const alarms: string[] = [];
+    const runtime = buildRuntime({
+      config: base, store, executor, clock: () => (t += 10), onAlarm: action => alarms.push(action.alarmId),
+      sampler: async now => ({
+        at: now, readyz: { status: null, latencyMs: null, error: true },
+        disk: { usedRatio: 0.99 }, inodes: { usedRatio: 0.99 },
+      }),
+    });
+    await runtime.start();
+    for (let i = 0; i < 3; i++) await runtime.sampleOnce();
+    const raised = Object.values(runtime.service.state.alarms);
+    expect(raised).toHaveLength(1);
+    expect(raised[0].class).toBe('canary.host-health');
+    expect(raised[0].state).toBe('raised');
+    expect(alarms).toHaveLength(1);
+    await runtime.sampleOnce();
+    expect(Object.keys(runtime.service.state.alarms)).toHaveLength(1);
+    await runtime.stop();
+  });
+
   it('reconciles accepted probe work on the periodic pass', async () => {
     const store = new MemoryStore();
     const privateStore = new MemoryStore();

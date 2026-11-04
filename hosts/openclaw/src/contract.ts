@@ -72,5 +72,9 @@ export const contract = defineFeatureContract({
     'compute.observe': { kind: 'action', description: 'Replace compute observations with validated metadata from an authorized allocator. This records observations only and does not launch work, authorize spending, or enforce admission.', input: ComputeInputSchema, output: ComputeSnapshotSchema,
       tool: { name: 'vsc_compute_observe', optional: true } },
   },
-  events: { changed: Type.Object({ revision: timestamp, area: oneOf('graph', 'compute', 'all') }, closed) },
+  events: {
+    changed: Type.Object({ revision: timestamp, area: oneOf('graph', 'compute', 'all') }, closed),
+    alarm: Type.Object({ alarmId: IdSchema, unitId: IdSchema, alarmClass: text(80),
+      severity: Type.Number({ minimum: 0, maximum: 1_000_000_000 }), at: timestamp }, closed),
+  },
 });
