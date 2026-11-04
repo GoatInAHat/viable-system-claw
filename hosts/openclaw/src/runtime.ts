@@ -63,6 +63,8 @@ export interface VsmRuntimeOptions {
   clock?: () => number;
   sampler?: (now: number) => Promise<CanarySample>;
   onAlarm?: (action: Extract<VsmAction, { type: 'alarm' }>, state: VsmState) => void;
+  /** Operator-surface notification; carries revision only, never private data. */
+  onChange?: (revision: number, updatedAt: number) => void;
   log?: (detail: string) => void;
   intervalMs?: number;
   channelId?: string;
@@ -150,6 +152,7 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
         evidenceRef: `canary:${sample.at}:readback:${effect.id}`,
       });
     }
+    options.onChange?.(service.state.revision, service.state.updatedAt);
   }
 
   async function sampleOnce(): Promise<void> {
@@ -169,6 +172,7 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
         evidenceRef: observation.evidenceRef,
       });
     }
+    options.onChange?.(service.state.revision, service.state.updatedAt);
     consecutiveFaults = severity > 0 ? consecutiveFaults + 1 : 0;
     if (consecutiveFaults >= CANARY_FAULT_STREAK && !openAlarm(service.state, 'canary.host-health')) {
       await service.apply({

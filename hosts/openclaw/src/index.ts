@@ -56,6 +56,7 @@ const plugin = defineFeaturePlugin({
           store: vsmStore, privateStore, agentId: runtimeConfig.agentId,
           log: detail => api.logger.warn(`VSC native dispatch ${detail}`),
         }),
+        onChange: (revision, updatedAt) => events.emit('vsm', { revision, updatedAt }),
         onAlarm: (action, state) => {
           const alarm = state.alarms[action.alarmId];
           api.logger.warn(`VSC alarm ${action.alarmId} raised for ${action.principalId}`);
