@@ -1,5 +1,14 @@
 # Implementation decisions
 
+## Authority at the actuator
+
+A grant that the actuator cannot enforce is not a grant. Every native launch carries the grant's capability claim into the persisted private intent, and the executor mediates it before calling the host:
+
+- An empty tool/surface claim runs with the exact empty tool surface (disableTools).
+- Any non-empty claim is refused as capability-unsupported until the host exposes an exact allowlist surface. The host's toolsAlsoAllow is additive to the worker's normal surface and cannot be combined with disableTools, so it cannot express "exactly these tools".
+
+A synchronous AuthorityFence, bound by the runtime to the live durable state, re-checks the exact grant version, revocation and validity at the host admission boundary. Revocation stops admissions; it does not cancel an already accepted run, and the fence is not a distributed lock.
+
 ## First increment
 
 Persistent responsibilities are independent of execution sessions. Explicit bindings connect native session observations to units. A session roster is not automatically an organizational hierarchy.

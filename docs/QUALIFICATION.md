@@ -95,3 +95,23 @@ Verification (fresh disposable Gateway `/tmp/vsc-qual-8`, port 18890, isolated s
 - Gateway stopped after the run; isolated state kept as local evidence only.
 
 Still open from the review: grant enforcement at the actual actuator (revocation race, `capabilities` not carried into native tool execution), crash-window recovery for reservations without receipts, failed-run environment readback, `audit.inspect` scheduling at `returnDueAt`, alarm acknowledgment and principal delivery, monolithic history bounds, compute-stewardship connection, and recursive adaptation.
+
+## Part 4: actuator-level authority and capability enforcement
+
+Commit 22050b7 closes the top-ranked review finding (.agents/local/astra-review-2.md gap 1) in two places:
+
+**Authority fence.** nativeExecutorFor now supplies a synchronous AuthorityFence to the native executor. buildRuntime binds the check to the live durable service state, and the executor calls it immediately before subagent.run. The check refuses the launch unless the effect is still reserved and its exact grant version is present, unrevoked, and inside its validity window. The host also receives the same assertion at its own run-admission boundary. A revocation committed after the adapter asynchronous preflight therefore still stops the launch; a revocation does not cancel an already accepted run.
+
+**Capability mediation at the actuator.** DispatchRequest.capabilities previously disappeared at the adapter boundary. It is now carried into EffectIntent, persisted with the private intent (validated: bounded string arrays), and enforced in launch():
+
+- The host exposes exactly two tool surfaces to a plugin subagent: none (disableTools) or its normal surface plus named plugin tools (toolsAlsoAllow). The two cannot be combined, and no exact subset of the normal surface can be formed.
+- Empty tool and surface claims become a genuinely tool-free run (disableTools: true).
+- Any non-empty tool or surface claim is refused as capability-unsupported (admission not-accepted), rather than launching with an authority the grant advertises but the actuator cannot enforce.
+
+**Evidence.** 255 tests and tsc --noEmit pass; the plugin validates. Fresh disposable Gateways:
+
+- /tmp/vsc-qual-9 and /tmp/vsc-qual-10 (port 18890, isolated state, VSC_RUNTIME_AGENT_ID=main, closed-port readiness fault). No authority-rejected or capability-unsupported rejection appeared in either log, so the normal path still launches.
+- /tmp/vsc-qual-10: five effects completed succeeded with outcome 1, five retained result payloads, one canary.host-health alarm, channel re-armed to evidence. Revision 46.
+- The tool-free run still returns a visible terminal reply, and the contrast is measurable: the qual-8 (tools available) reply reported sampled numbers (load ~4.8-5.1, memory 10.9/15.4 GB used, root filesystem 95% used), while the qual-9 tool-free reply is a status line with no measurements (Host vado ... responsive for canary/local/forward/effect/1 - no anomalies observed). The model no longer had tools, and the run still satisfied the evaluated-outcome rule.
+
+**Not claimed.** A revocation is not a cancel/drain of accepted work (the kernel explicitly keeps accepted external runs alive). The fence narrows the launch race to the host own admission call; it is not a distributed lock. Surface restrictions remain unenforced for any purpose that needs them, which is why such a grant is refused rather than weakened silently.
