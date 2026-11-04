@@ -8,7 +8,7 @@ import { EXECUTION_LIMITS, projectEffectIntent, type EffectIntent, type EffectOu
 const now = 10_000;
 const intent = (patch: Partial<EffectIntent> = {}): EffectIntent => ({ id: 'effect-1', unitId: 'unit-1',
   procedureId: 'procedure-1', agentId: 'worker', message: 'private-input', purpose: 'private-purpose',
-  grantRef: 'grant:1', createdAt: now - 1, ...patch });
+  grantRef: 'grant:1', capabilities: { tools: [], surfaces: [] }, createdAt: now - 1, ...patch });
 const accepted = (patch: Partial<Extract<EffectReceipt, { status: 'accepted' }>> = {}): Extract<EffectReceipt, { status: 'accepted' }> => ({
   effectId: 'effect-1', status: 'accepted', runId: 'run-1', sessionKey: effectSessionKey('effect-1', 'worker'), at: now, ...patch,
 });
@@ -33,7 +33,7 @@ describe('native dispatch', () => {
     expect(receipt).toEqual(accepted());
     expect(receipt).not.toHaveProperty('outcome');
     expect(f.run).toHaveBeenCalledExactlyOnceWith({ sessionKey: accepted().sessionKey,
-      message: 'private-input', deliver: false, promptMode: 'minimal' });
+      message: 'private-input', deliver: false, promptMode: 'minimal', disableTools: true });
     expect(f.run.mock.calls[0][0]).not.toHaveProperty('model');
     expect(f.run.mock.calls[0][0]).not.toHaveProperty('provider');
     expect(f.run.mock.calls[0][0]).not.toHaveProperty('completionDelivery');
@@ -84,7 +84,10 @@ describe('native dispatch', () => {
     [{ deadline: Number.POSITIVE_INFINITY }, 'invalid-intent'],
     [{ deadline: now - 2 }, 'invalid-intent'],
     [{ deadline: now }, 'deadline-expired'],
-  ] as const)('rejects invalid or unavailable dispatch before any launch: %j', async (patch, reason) => {
+    [{ capabilities: { tools: ['exec'], surfaces: [] as string[] } }, 'capability-unsupported'],
+    [{ capabilities: { tools: [] as string[], surfaces: ['filesystem'] } }, 'capability-unsupported'],
+    [{ capabilities: { tools: ['bad\ntool'], surfaces: [] as string[] } }, 'invalid-intent'],
+  ] as readonly (readonly [Partial<EffectIntent>, string])[])('rejects invalid or unavailable dispatch before any launch: %j', async (patch, reason) => {
     const f = fake();
     const receipt = await f.executor().dispatch(intent(patch));
     expect(receipt).toMatchObject({ status: 'rejected', admission: 'not-accepted', runId: null, reason });
@@ -125,6 +128,17 @@ describe('native dispatch', () => {
     expect(assertCurrent).toHaveBeenCalledTimes(2);
     expect(assertCurrent.mock.calls[1][0].message).toBe('private-input');
     expect(Object.isFrozen(assertCurrent.mock.calls[1][0])).toBe(true);
+  });
+  it('refuses a launch at the fence when authority closed after admission', async () => {
+    const f = fake();
+    let closed = false;
+    const fence = { check: (value: Readonly<EffectIntent>) => { if (closed) throw new Error('VSC_AUTHORITY_CLOSED'); expect(value.id).toBe('effect-1'); } };
+    const executor = f.executor({ fence });
+    expect((await executor.dispatch(intent())).status).toBe('accepted');
+    closed = true;
+    const second = await executor.dispatch(intent({ id: 'effect-2' }));
+    expect(second).toMatchObject({ status: 'rejected', admission: 'not-accepted', reason: 'authority-rejected' });
+    expect(f.run).toHaveBeenCalledTimes(1);
   });
   it('treats accepted launch with lost admission reply as ambiguous, not retryable', async () => {
     const f = fake();

@@ -52,6 +52,8 @@ export function createNativeExecutor(options: NativeAdapterOptions): NativeExecu
         procedureId: request.procedureId,
         grantRef: `${request.grant.id}:${request.grant.version}`,
         ...resolved,
+        // The grant's own claim wins over any adapter-supplied value.
+        capabilities: { tools: [...request.capabilities.tools], surfaces: [...request.capabilities.surfaces] },
       };
       let receipt: EffectReceipt;
       try {

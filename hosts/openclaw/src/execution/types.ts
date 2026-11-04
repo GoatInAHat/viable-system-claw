@@ -2,7 +2,7 @@ import type { PluginRuntime } from 'openclaw/plugin-sdk/core';
 
 /** Limits are per record/observation, not workload or context limits on the host. */
 export const EXECUTION_LIMITS = {
-  id: 128, agentId: 64, message: 32_768, purpose: 512,
+  id: 128, agentId: 64, message: 32_768, purpose: 512, tool: 128,
   nativeId: 256, sessionKey: 512, messageCount: 10,
   privateMessagesBytes: 65_536, privateReplyCharacters: 16_384,
   waitMs: 30_000,
@@ -18,13 +18,20 @@ export interface EffectIntent {
   purpose: string;
   /** Opaque authority reference, never a credential or authorization by itself. */
   grantRef: string;
+  /** Grant capability claim. The actuator mediates it or refuses the launch. */
+  capabilities: { tools: string[]; surfaces: string[] };
   createdAt: number;
   deadline?: number;
 }
 
+/** Mutable holder so the runtime can bind the fence after constructing the executor. */
+export interface AuthorityFence { check?: (intent: Readonly<EffectIntent>) => void }
+
 export type RejectionReason = 'invalid-intent' | 'invalid-agent' | 'missing-agent'
   | 'invalid-message' | 'message-too-long' | 'deadline-expired'
-  | 'authority-rejected' | 'validation-unavailable' | 'admission-unknown' | 'invalid-admission';
+  | 'authority-rejected' | 'validation-unavailable' | 'admission-unknown' | 'invalid-admission'
+  /** The grant claims tools or surfaces this actuator cannot enforce exactly. */
+  | 'capability-unsupported';
 export type EffectReceipt = {
   effectId: string;
   status: 'accepted';

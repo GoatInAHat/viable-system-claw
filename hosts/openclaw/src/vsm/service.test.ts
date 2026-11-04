@@ -181,6 +181,7 @@ describe('durable VSM service', () => {
           id: request.effectId, unitId: request.unitId, procedureId: request.procedureId,
           agentId: 'canary', message: 'Report host health.', purpose: 'canary probe',
           grantRef: `${request.grant.id}:${request.grant.version}`, createdAt: 100,
+          capabilities: { tools: [], surfaces: [] },
           sessionKey: 'agent:canary:subagent:viable-system-claw-effect-abc',
         };
       },

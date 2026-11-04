@@ -6,6 +6,7 @@ import { Backend } from './backend/backend.js';
 import { planAllocation } from './compute/index.js';
 import { fromNativeEvent, fromSessionSend, metadataId, type Observation } from './backend/events.js';
 import { buildRuntime, ensureRootState, nativeExecutorFor, readRuntimeConfig } from './runtime.js';
+import type { AuthorityFence } from './execution/types.js';
 import { emptyVsmSnapshot, projectVsmSnapshot } from './backend/vsm-snapshot.js';
 import { readDocument, VSM_DOCUMENT_KEY } from './vsm/state.js';
 
@@ -50,10 +51,11 @@ const plugin = defineFeaturePlugin({
       const privateStore = runtimeConfig.agentId
         ? api.runtime.state.openKeyedStoreV2({ namespace: 'vsm-private', retention: 'retained' })
         : undefined;
+      const fence: AuthorityFence = {};
       const runtime = buildRuntime({
-        config: runtimeConfig, store: vsmStore, privateStore, clock,
+        config: runtimeConfig, store: vsmStore, privateStore, clock, fence,
         executor: nativeExecutorFor(api, clock, {
-          store: vsmStore, privateStore, agentId: runtimeConfig.agentId,
+          store: vsmStore, privateStore, agentId: runtimeConfig.agentId, fence,
           privateResultSink: {
             write: async result => {
               const observed = await privateStore!.observe(result.ref);

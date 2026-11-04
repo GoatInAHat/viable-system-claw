@@ -17,6 +17,7 @@ class MemoryStore implements DocumentStore {
 const intent = (overrides: Partial<StoredIntent> = {}): StoredIntent => ({
   id: 'a/environment/return/effect/1', unitId: 'a', procedureId: 'a/probe', agentId: 'canary',
   message: 'Report host health in one line.', purpose: 'canary probe', grantRef: 'g:1', createdAt: 10,
+  capabilities: { tools: [], surfaces: [] },
   sessionKey: 'agent:canary:subagent:viable-system-claw-effect-abc',
   ...overrides,
 });

@@ -9,7 +9,7 @@ import { readIntent, writeIntent } from './vsm/intent-store.js';
 import { effectSessionKey } from './execution/native.js';
 import { CANARY_THRESHOLDS, canaryObservations, sampleCanary, type CanarySample } from './vsm/canary.js';
 import type { NativeExecutor } from './vsm/executor.js';
-import type { PrivateResultSink } from './execution/types.js';
+import type { AuthorityFence, PrivateResultSink } from './execution/types.js';
 import type { VsmAction, VsmState } from './vsm/types.js';
 
 export interface VsmRuntimeConfig {
@@ -60,6 +60,8 @@ export interface VsmRuntimeOptions {
   config: VsmRuntimeConfig;
   store: DocumentStore;
   executor: NativeExecutor;
+  /** Optional shared fence; buildRuntime binds the synchronous authority check. */
+  fence?: AuthorityFence;
   privateStore?: DocumentStore;
   clock?: () => number;
   sampler?: (now: number) => Promise<CanarySample>;
@@ -105,6 +107,7 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
           message: `Observe host health for ${request.effectId}. Reply with one short status line and no file changes.`,
           purpose: procedure?.executionRef ?? 'canary probe',
           grantRef: `${request.grant.id}:${request.grant.version}`,
+          capabilities: { tools: [...request.capabilities.tools], surfaces: [...request.capabilities.surfaces] },
           createdAt: clock(),
           sessionKey: effectSessionKey(request.effectId, options.config.agentId!),
         };
@@ -113,6 +116,22 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
       },
     } : {}),
   });
+  // Synchronous last-instant authority fence: reads the latest committed document at the
+  // host's admission boundary, so a revocation committed after the adapter's preflight
+  // still refuses the launch. A revocation does not cancel an already accepted run.
+  if (options.fence) options.fence.check = intent => {
+    const state = service.state;
+    const effect = state.effects[intent.id];
+    if (!effect || effect.status !== 'reserved') throw new Error('VSC_AUTHORITY_CLOSED');
+    const separator = intent.grantRef.lastIndexOf(':');
+    const grantId = intent.grantRef.slice(0, separator);
+    const version = Number(intent.grantRef.slice(separator + 1));
+    const grant = state.grants[grantId];
+    const at = clock();
+    if (!grant || grant.version !== version || grant.revokedAt !== null
+      || at < grant.validFrom || at >= grant.validUntil) throw new Error('VSC_AUTHORITY_CLOSED');
+    if (effect.grantId !== grantId || effect.grantVersion !== version) throw new Error('VSC_AUTHORITY_CLOSED');
+  };
   let timer: ReturnType<typeof setInterval> | null = null;
   let consecutiveFaults = 0;
 
@@ -293,6 +312,7 @@ export function nativeExecutorFor(
     agentId?: string;
     log?: (detail: string) => void;
     privateResultSink?: PrivateResultSink;
+    fence?: AuthorityFence;
   } = {},
 ): NativeExecutor {
   return createNativeExecutor({
@@ -302,12 +322,14 @@ export function nativeExecutorFor(
       agentExists: id => options.agentId !== undefined && id === options.agentId,
       now: clock,
       ...(options.privateResultSink ? { privateResultSink: options.privateResultSink } : {}),
+      ...(options.fence ? { fence: options.fence } : {}),
     }),
     resolveIntent: async request => {
       if (!options.privateStore) return undefined;
       const intent = await readIntent(options.privateStore, request.effectId);
       if (!intent) return undefined;
       return { agentId: intent.agentId, message: intent.message, purpose: intent.purpose, createdAt: intent.createdAt,
+        capabilities: { tools: [...intent.capabilities.tools], surfaces: [...intent.capabilities.surfaces] },
         ...(intent.deadline === undefined ? {} : { deadline: intent.deadline }) };
     },
     assertAdmission: async request => {

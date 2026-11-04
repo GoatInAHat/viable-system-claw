@@ -12,7 +12,8 @@ const request: DispatchRequest = {
   capabilities: { tools: [], surfaces: [] },
 };
 
-const intent = { agentId: 'canary', message: 'sample host health', purpose: 'canary', createdAt: 10 };
+const intent = { agentId: 'canary', message: 'sample host health', purpose: 'canary', createdAt: 10,
+  capabilities: { tools: [], surfaces: [] } };
 
 function fakeExecutor(receipt: EffectReceipt, outcome?: EffectOutcome) {
   const calls = { dispatch: 0, reconcile: 0 };

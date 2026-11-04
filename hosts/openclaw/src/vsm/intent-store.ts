@@ -33,6 +33,13 @@ export function assertIntent(intent: StoredIntent): void {
     || intent.sessionKey.length > 512 || !/^[A-Za-z0-9][A-Za-z0-9:._/-]*$/.test(intent.sessionKey)) {
     throw new Error('VSC_INTENT_SESSION');
   }
+  const caps = intent.capabilities;
+  if (!caps || !Array.isArray(caps.tools) || !Array.isArray(caps.surfaces)
+    || caps.tools.length > 32 || caps.surfaces.length > 32
+    || !caps.tools.every(tool => valid(tool, EXECUTION_LIMITS.tool))
+    || !caps.surfaces.every(surface => valid(surface, EXECUTION_LIMITS.tool))) {
+    throw new Error('VSC_INTENT_CAPABILITIES');
+  }
   if (!Number.isSafeInteger(intent.createdAt) || intent.createdAt < 0) throw new Error('VSC_INTENT_TIME');
   if (intent.deadline !== undefined && (!Number.isSafeInteger(intent.deadline) || intent.deadline < intent.createdAt)) {
     throw new Error('VSC_INTENT_DEADLINE');
@@ -43,6 +50,8 @@ function sameIntent(left: StoredIntent, right: StoredIntent): boolean {
   return left.id === right.id && left.unitId === right.unitId && left.procedureId === right.procedureId
     && left.agentId === right.agentId && left.message === right.message && left.purpose === right.purpose
     && left.grantRef === right.grantRef && left.createdAt === right.createdAt && left.deadline === right.deadline
+    && left.capabilities.tools.join('\0') === right.capabilities.tools.join('\0')
+    && left.capabilities.surfaces.join('\0') === right.capabilities.surfaces.join('\0')
     && left.sessionKey === right.sessionKey;
 }
 

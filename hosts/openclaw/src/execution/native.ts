@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { EffectReconciler } from './reconcile.js';
-import { EXECUTION_LIMITS, type EffectExecutor, type EffectIntent, type EffectOutcome,
+import { EXECUTION_LIMITS, type AuthorityFence, type EffectExecutor, type EffectIntent, type EffectOutcome,
   type EffectReceipt, type NativeSubagentRuntime, type ReconcileOptions, type RejectionReason } from './types.js';
 
 const AGENT_ID = /^[a-z0-9][a-z0-9_-]*$/;
@@ -21,7 +21,13 @@ export interface NativeExecutorOptions extends ReconcileOptions {
   now?: () => number;
   /** Optional live authority assertion, also forwarded to host admission. */
   assertCurrent?: (intent: Readonly<EffectIntent>) => void;
+  /**
+   * Synchronous last-instant fence owned by the durable runtime. The runtime installs
+   * `check` once its service exists; throwing refuses the launch.
+   */
+  fence?: AuthorityFence;
 }
+
 
 /** In-process deduplication only. The parent owns the durable launch journal. */
 export class NativeEffectExecutor implements EffectExecutor {
@@ -72,13 +78,26 @@ export class NativeEffectExecutor implements EffectExecutor {
     if (typeof intent.message !== 'string' || !intent.message.trim() || intent.message.includes('\0')) return reject('invalid-message');
     if (intent.message.length > EXECUTION_LIMITS.message) return reject('message-too-long');
     if (intent.deadline !== undefined && intent.deadline <= at) return reject('deadline-expired');
+    // Capability mediation. The host exposes only two exact tool surfaces to a plugin
+    // subagent: none (disableTools) or its normal surface plus named plugin tools. An
+    // exact subset cannot be formed, so a grant that claims tools or surfaces is refused
+    // rather than advertised. An empty claim becomes a genuinely tool-free run.
+    const tools = intent.capabilities.tools;
+    const surfaces = intent.capabilities.surfaces;
+    if (!Array.isArray(tools) || !Array.isArray(surfaces)
+      || !tools.every(tool => validReference(tool, EXECUTION_LIMITS.tool))
+      || !surfaces.every(surface => validReference(surface, EXECUTION_LIMITS.tool))) return reject('invalid-intent');
+    if (tools.length > 0 || surfaces.length > 0) return reject('capability-unsupported');
     try { if (!this.options.agentExists(intent.agentId)) return reject('missing-agent'); }
     catch { return reject('validation-unavailable'); }
     try { this.options.assertCurrent?.(intent); }
     catch { return reject('authority-rejected'); }
+    // Last synchronous authority fence before the host's own admission boundary.
+    try { this.options.fence?.check?.(intent); }
+    catch { return reject('authority-rejected'); }
     try {
       const result = await this.api.runtime.subagent.run({
-        sessionKey, message: intent.message, deliver: false, promptMode: 'minimal',
+        sessionKey, message: intent.message, deliver: false, promptMode: 'minimal', disableTools: true,
         ...(this.options.assertCurrent ? { assertCurrent: () => this.options.assertCurrent!(intent) } : {}),
       });
       if (!validReference(result.runId, EXECUTION_LIMITS.nativeId)
