@@ -1,0 +1,88 @@
+# tf:ignore
+# ─── Agent local state ────────────────────────────────────
+# .agents/local/ is the personal overlay: same shape as .agents/ (skills/,
+# mcp/servers.json, AGENTS.md), rendered into your harnesses on this machine
+# only, never absorbed into the canon, never committed.
+/.agents/local/
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/worktrees/
+
+# ─── Generated agent adapters ─────────────────────────────
+# Rendered per checkout from .agents/ by .agents/sync.py; never hand-edited
+# or committed. Keep in step with sync.py's renderers — `sync.py check` fails
+# if a renderer output is unignored or tracked.
+/CLAUDE.md
+/GEMINI.md
+/.mcp.json
+/.claude/skills/
+/.codebuddy/skills/
+/.gemini/settings.json
+/.qwen/settings.json
+/.cursor/mcp.json
+/.codex/config.toml
+/.vscode/mcp.json
+/.factory/mcp.json
+/.amp/settings.json
+/opencode.json
+/kilo.jsonc
+# The `skills` CLI symlinks straight into Factory's own skills directory, which
+# `sync.py` does not manage.
+/.factory/skills/
+
+# ─── toolfactory ──────────────────────────────────────────
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+# npm writes this when the host plugin is validated; its only dependency on this repo is file:../..
+hosts/*/package-lock.json
+hosts/*/uv.lock
+# Build products: generated and locked like every other file, rebuilt rather than tracked.
+dev.toolfactory/coverage.json
+dev.toolfactory/inspector.json
+# /tf:ignore
+
+# ─── Secrets & env ────────────────────────────────────────
+*.pem
+*.key
+*.p12
+id_rsa*
+id_ed25519*
+service-account*.json
+.netrc
+
+# ─── Dependencies ─────────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# ─── Build output ─────────────────────────────────────────
+build/
+out/
+target/
+coverage/
+*.egg-info/
+
+# ─── Logs & caches ────────────────────────────────────────
+*.log
+logs/
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+tmp/
+
+# ─── Editors & OS ─────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+*~
+
+# ─── Local data ───────────────────────────────────────────
+*.sqlite
+*.sqlite3
+*.db

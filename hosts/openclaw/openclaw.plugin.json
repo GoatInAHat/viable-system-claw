@@ -1,0 +1,17 @@
+{
+  "id": "viable-system-claw",
+  "name": "Viable System Claw",
+  "description": "A recursive organization and adaptive compute allocator for OpenClaw.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": []
+  }
+}

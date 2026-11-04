@@ -1,0 +1,469 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "identity": {
+      "type": "string",
+      "description": "Repo-relative path of the authored identity file (plugin.json, package.json, pyproject.toml, or a host manifest)."
+    },
+    "binding": {
+      "type": "string",
+      "enum": [
+        "typescript",
+        "python"
+      ],
+      "description": "Language of the core logic and its kernel surfaces."
+    },
+    "runtime": {
+      "description": "Whether this project has an executable kernel. `none` is for an instruction-only Codex skill/plugin and permits only the skill and codex surfaces.",
+      "type": "string",
+      "enum": [
+        "kernel",
+        "none"
+      ]
+    },
+    "surfaces": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "skill",
+          "agent-plugins",
+          "claude",
+          "codex",
+          "cursor",
+          "mcp",
+          "mcp-registry",
+          "cli",
+          "npm",
+          "pypi",
+          "openclaw-native",
+          "hermes-native",
+          "clawhub",
+          "web",
+          "dsh",
+          "workflows",
+          "agents",
+          "readme",
+          "gemini",
+          "mcpb",
+          "browser-extension",
+          "vscode-extension",
+          "cargo",
+          "nuget",
+          "maven-central",
+          "rubygems",
+          "packagist",
+          "go-module",
+          "homebrew",
+          "winget",
+          "scoop",
+          "chocolatey",
+          "apt",
+          "rpm"
+        ]
+      },
+      "description": "Selected surfaces. A file exists iff a selected surface owns it."
+    },
+    "kernel": {
+      "description": "How to spawn the kernel MCP server for introspection; defaults from the binding.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "args": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "command"
+      ]
+    },
+    "bundle": {
+      "default": {
+        "runtime": "package"
+      },
+      "description": "How mcp.json reaches the kernel: a published package (npx/uvx) or a committed single-file build.",
+      "type": "object",
+      "properties": {
+        "runtime": {
+          "default": "package",
+          "type": "string",
+          "enum": [
+            "package",
+            "bundled"
+          ]
+        }
+      }
+    },
+    "config": {
+      "description": "JSON Schema 2020-12 object for the tool's configuration; mark secrets with x-toolfactory.sensitive.",
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "tests": {
+      "default": {
+        "examples": {}
+      },
+      "description": "Example arguments per operation, used by the generated surface-smoke tests.",
+      "type": "object",
+      "properties": {
+        "examples": {
+          "default": {},
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        }
+      }
+    },
+    "npm": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "string"
+        }
+      }
+    },
+    "codex": {
+      "type": "object",
+      "properties": {
+        "interface": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {}
+        },
+        "mcp": {
+          "default": true,
+          "description": "Whether the Codex plugin manifest eagerly configures the generated MCP server.",
+          "type": "boolean"
+        }
+      }
+    },
+    "browserExtension": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "description": "The kernel's mcp --http URL the extension pairs with; defaults to the kernel's own default port.",
+          "type": "string"
+        },
+        "authDomains": {
+          "description": "Match patterns the extension may act in with the user's own session (host_permissions).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cookieExport": {
+          "description": "Opt in to exporting the session cookies of authDomains to the kernel (needs the cookies permission; Chromium and Firefox only).",
+          "type": "boolean"
+        },
+        "geckoId": {
+          "description": "Firefox add-on id; defaults to <name>@<github owner>.github.io.",
+          "type": "string"
+        },
+        "icon": {
+          "description": "Repo-relative source PNG or SVG the icon set is resized from; the placeholder set otherwise.",
+          "type": "string"
+        },
+        "sidePanel": {
+          "description": "Also register a Chromium side panel (Chromium only).",
+          "type": "boolean"
+        },
+        "safari": {
+          "description": "Add the macOS Safari packaging leg to the release workflow.",
+          "type": "boolean"
+        }
+      }
+    },
+    "mcpb": {
+      "description": "Privacy-policy URLs of the services this tool talks to; Anthropic's Connectors Directory submission requires them in the MCPB manifest.",
+      "type": "object",
+      "properties": {
+        "privacyPolicies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "hermes": {
+      "type": "object",
+      "properties": {
+        "toolset": {
+          "type": "string"
+        }
+      }
+    },
+    "vscode": {
+      "type": "object",
+      "properties": {
+        "publisher": {
+          "description": "Your registered Visual Studio Marketplace/Open VSX publisher; repository owner is the local packaging default.",
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9-]*$"
+        },
+        "marketplace": {
+          "default": true,
+          "type": "boolean"
+        },
+        "openvsx": {
+          "default": true,
+          "type": "boolean"
+        }
+      }
+    },
+    "nativePackages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "cargo",
+              "nuget",
+              "maven-central",
+              "rubygems",
+              "packagist",
+              "go-module"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "identity": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Registry package identity, including its required namespace."
+          },
+          "versionCommand": {
+            "description": "Command run in path that prints exactly the authored native package version.",
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "identity",
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "systemPackages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "homebrew",
+              "winget",
+              "scoop",
+              "chocolatey",
+              "apt",
+              "rpm"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "identity": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Native package metadata path relative to path."
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Native package/catalog identity; never inferred from Toolfactory name."
+          },
+          "versionCommand": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Command run in path that prints only the authored package version."
+          },
+          "buildCommand": {
+            "description": "Author-owned native build command, run in path before an archive or installer is staged.",
+            "type": "string",
+            "minLength": 1
+          },
+          "buildDependencies": {
+            "default": [],
+            "description": "Native OS packages installed by the Debian or Fedora CI builder.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "asset": {
+            "description": "Repository-relative, author-built archive or installer when the manager consumes one.",
+            "type": "string",
+            "minLength": 1
+          },
+          "tap": {
+            "description": "Author-controlled Homebrew tap (owner/homebrew-tap).",
+            "type": "string",
+            "minLength": 1
+          },
+          "bucket": {
+            "description": "Author-controlled Scoop bucket repository (owner/repo).",
+            "type": "string",
+            "minLength": 1
+          },
+          "bucketName": {
+            "description": "Local Scoop bucket name used by install commands.",
+            "type": "string",
+            "minLength": 1
+          },
+          "catalogPath": {
+            "description": "Repository-relative destination inside the author-controlled tap or bucket.",
+            "type": "string",
+            "minLength": 1
+          },
+          "ppa": {
+            "description": "Launchpad PPA as owner/archive.",
+            "type": "string",
+            "minLength": 1
+          },
+          "coprProject": {
+            "description": "COPR project name (owner/project).",
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "identity",
+          "name",
+          "versionCommand"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "openclaw": {
+      "type": "object",
+      "properties": {
+        "registers": {
+          "description": "Host registrations the plugin makes beyond tools; one declaration drives the manifest contracts, the plugin inspector's expectations and the generated test.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "api": {
+                "type": "string",
+                "description": "OpenClawPluginApi method, e.g. registerRealtimeVoiceProvider"
+              },
+              "contract": {
+                "type": "string",
+                "description": "openclaw.plugin.json contracts key, e.g. realtimeVoiceProviders"
+              },
+              "ids": {
+                "default": [],
+                "description": "Ids registered under that contract",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "api",
+              "contract"
+            ]
+          }
+        },
+        "activation": {
+          "description": "openclaw.plugin.json activation; default onStartup.",
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {}
+        },
+        "pluginApi": {
+          "description": "Plugin API range for compat.pluginApi and the openclaw peer dependency.",
+          "type": "string"
+        },
+        "skills": {
+          "description": "Skill directories under `.agents/skills/` that the OpenClaw plugin ships; OpenClaw loads them through the manifest's `skills` roots.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dependencies": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "peerDependencies": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "devDependencies": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "identity",
+    "binding",
+    "surfaces"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# tf:setup
+# The one setup entry point. Every environment calls this same script through
+# its native, committed hook — see the environments table in .agents/README.md
+# — so setup stays standardized instead of per-harness. Idempotent and
+# non-interactive. Outside an isolated environment it touches nothing beyond
+# this repository; only where $HOME belongs to the project — a container or
+# CI sandbox, which the devcontainer provides locally — does it also install
+# rtk and hook it into agent configs.
+set -euo pipefail
+cd "$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+
+# --isolated (passed by hooks that only ever run in project-owned sandboxes)
+# forces isolation; otherwise detect it. Remaining arguments go to sync.py.
+isolated=false
+for arg in "$@"; do
+    shift
+    if [ "$arg" = "--isolated" ]; then isolated=true; else set -- "$@" "$arg"; fi
+done
+if [ "${CLAUDE_CODE_REMOTE:-}" = "true" ] || [ -f /.dockerenv ] ||
+    [ -n "${CODESPACES:-}${DEVCONTAINER:-}${REMOTE_CONTAINERS:-}${GITPOD_WORKSPACE_ID:-}${CI:-}${container:-}" ]; then
+    isolated=true
+fi
+
+# The template repository itself — origin matching the keep= slug in
+# AGENTS.md's bootstrap marker — keeps shipping that notice; repos generated
+# from it shed it on first setup.
+is_template=false
+keep_slug="$(sed -n 's/.*<!-- setup keep=\([^ >]*\) -->.*/\1/p' AGENTS.md 2>/dev/null | head -n 1)"
+origin_url="$(git remote get-url origin 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)"
+if [ -n "$keep_slug" ] && [ -n "$origin_url" ]; then
+    case "$origin_url" in
+        *"$(printf '%s' "$keep_slug" | tr '[:upper:]' '[:lower:]')"*) is_template=true ;;
+    esac
+fi
+
+# Adopt harness-local agent config into .agents/ and render adapters back out.
+python3 .agents/sync.py "$@"
+
+# Native git hooks, since git runs nothing from a fresh clone by itself:
+# after this first contact, every pull and branch switch re-syncs on its own,
+# and pre-commit converges and stages agent config so commits just work.
+# Never clobbers a hook this repo's users wrote themselves.
+hooks_dir="$(git rev-parse --git-path hooks)"
+mkdir -p "$hooks_dir"
+own_hook() {
+    [ ! -e "$hooks_dir/$1" ] || grep -q '\.agents/sync\.py' "$hooks_dir/$1" 2>/dev/null
+}
+if own_hook pre-commit; then
+    cat > "$hooks_dir/pre-commit" <<'HOOK'
+#!/usr/bin/env bash
+# Installed by .agents/setup. Absorbs harness-local agent config into
+# .agents/, re-renders, and stages the canonical result, so the commit just
+# works; it fails only when a human must decide (the message says why).
+out="$(python3 .agents/sync.py)" || { printf '%s\n' "$out" >&2; exit 1; }
+printf '%s\n' "$out" | grep '^Adopted' >&2 || true
+git add -A -- .agents
+git add -A -- skills-lock.json 2>/dev/null || true
+exec python3 .agents/sync.py check >/dev/null
+HOOK
+    chmod +x "$hooks_dir/pre-commit"
+fi
+for lifecycle_hook in post-checkout post-merge; do
+    if own_hook "$lifecycle_hook"; then
+        cat > "$hooks_dir/$lifecycle_hook" <<'HOOK'
+#!/usr/bin/env bash
+# Installed by .agents/setup.
+python3 .agents/sync.py >/dev/null 2>&1 || true
+HOOK
+        chmod +x "$hooks_dir/$lifecycle_hook"
+    fi
+done
+
+# The bootstrap notice in AGENTS.md is for agents in environments where
+# nothing ran this script; once it has run, the hooks above make everything
+# automatic, so the notice deletes itself. CI keeps the file untouched (a
+# self-edit would dirty the tree), as does the template repository.
+if [ "${GITHUB_ACTIONS:-}" != "true" ] && [ "$is_template" != "true" ]; then
+    python3 - <<'PY'
+import re
+from pathlib import Path
+
+path = Path("AGENTS.md")
+text = path.read_text(encoding="utf-8") if path.is_file() else ""
+match = re.search(r"<!-- setup[^>]* -->\n.*?<!-- /setup -->\n*", text, re.S)
+if match:
+    path.write_text(text[:match.start()] + text[match.end():], encoding="utf-8")
+    print("Bootstrap complete; removed the one-time notice from AGENTS.md.")
+PY
+fi
+
+# rtk (github.com/rtk-ai/rtk) compresses command output before agents read
+# it. Isolated environments only: a repo's setup must not rewrite personal
+# agent configs on someone's own machine.
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+install_rtk() {
+    curl -fsSL "https://raw.githubusercontent.com/rtk-ai/rtk/${1:-refs/heads/master}/install.sh" |
+        RTK_VERSION="${1:-}" sh >/dev/null 2>&1
+}
+if [ "$isolated" = "true" ]; then
+    if ! command -v rtk >/dev/null 2>&1; then
+        # Latest release — versioning is rtk's own business. Where a sandbox
+        # blocks api.github.com, the newest tag still comes over the git
+        # protocol, so name it explicitly and retry.
+        install_rtk || install_rtk "$(git ls-remote --tags --sort=-v:refname \
+            https://github.com/rtk-ai/rtk 'v[0-9]*' 2>/dev/null |
+            grep -v '\^{}' | sed -n '1s|.*refs/tags/||p')" || true
+    fi
+    # Hook rtk into every agent it supports, enumerated from rtk's own help
+    # so a new rtk target needs no template change. Runs in a throwaway
+    # directory: global (-g) config lands in $HOME, and anything an init
+    # drops into its working directory — the project-scoped,
+    # instruction-file modes — is discarded, since those agents read
+    # AGENTS.md and its rtk note already covers them.
+    if command -v rtk >/dev/null 2>&1; then
+        mkdir -p "$HOME/.claude" "$HOME/.cursor"  # rtk 0.46 assumes these exist
+        rtk_tmp="$(mktemp -d)"
+        (
+            cd "$rtk_tmp"
+            for rtk_agent in $(rtk init --help 2>/dev/null |
+                    sed -n 's/^ *- \([a-z0-9-]*\): .*/\1/p'); do
+                rtk init -g --auto-patch --agent "$rtk_agent" >/dev/null 2>&1 || true
+            done
+            for rtk_flag in --gemini --copilot --opencode; do
+                rtk init -g --auto-patch "$rtk_flag" >/dev/null 2>&1 || true
+            done
+            rtk init -g --codex >/dev/null 2>&1 || true  # rejects --auto-patch
+        )
+        rm -rf "$rtk_tmp"
+    fi
+else
+    echo "Personal environment: \$HOME left alone (no rtk install or agent" \
+        "hooks). The devcontainer provides the fully wired, isolated setup."
+fi
+
+# The pre-commit hook installed above converges agent config; toolfactory's drift gate goes in
+# front of its final `exec` so a commit cannot leave a generated file stale. That hook is
+# rewritten on every setup run, so the gate is re-inserted here every time, and before the
+# dependency install below, which is the step most likely to fail on a fresh machine.
+python3 - <<'PY'
+import pathlib, subprocess
+
+hooks = subprocess.run(["git", "rev-parse", "--git-path", "hooks"],
+                       capture_output=True, text=True).stdout.strip()
+hook = pathlib.Path(hooks) / "pre-commit"
+gate = 'npx toolfactory check >/dev/null || { echo "toolfactory: generated files are stale; run npx toolfactory build" >&2; exit 1; }'
+if hook.is_file():
+    lines = hook.read_text(encoding="utf-8").splitlines()
+    if gate not in lines:
+        at = next((i for i, line in enumerate(lines) if line.startswith("exec ")), len(lines))
+        lines.insert(at, gate)
+        hook.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+
+# Project setup: the dependencies this project's toolchain needs.
+npm install --no-audit --no-fund
+# /tf:setup
+
+# Anything else this project needs at setup time (codegen, migrations) goes
+# here. Keep it idempotent and fast when there is nothing to do.

@@ -1,0 +1,38 @@
+{
+  "name": "viable-system-claw",
+  "version": "0.1.0",
+  "description": "A recursive organization and adaptive compute allocator for OpenClaw.",
+  "repository": "https://github.com/GoatInAHat/viable-system-claw",
+  "keywords": [
+    "viable-system-claw"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "test:live": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run tests/live.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "commander": "^15.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "toolfactory": "^0.2.1",
+    "tsx": "^4.0.0",
+    "typescript": "^6.0.0",
+    "vitest": "^4.0.0"
+  },
+  "files": [
+    "dist",
+    "src",
+    "schemas",
+    "README.md",
+    "LICENSE"
+  ]
+}

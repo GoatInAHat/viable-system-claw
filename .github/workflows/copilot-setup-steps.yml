@@ -1,0 +1,13 @@
+# Copilot's cloud coding agent runs the `copilot-setup-steps` job before the
+# agent starts. It reads AGENTS.md and .agents/skills/ natively; this hook
+# exists so project setup in .agents/setup reaches it too.
+name: Copilot setup steps
+
+on: workflow_dispatch
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: bash .agents/setup

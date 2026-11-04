@@ -1,0 +1,2 @@
+# Normalize line endings so scripts and symlinks survive a Windows checkout.
+* text=auto eol=lf

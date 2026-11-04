@@ -1,0 +1,17 @@
+{
+  "viable-system-claw": {
+    "command": "node",
+    "args": [
+      "--import",
+      "tsx",
+      "src/toolfactory/mcp.ts"
+    ]
+  },
+  "toolfactory": {
+    "command": "npx",
+    "args": [
+      "toolfactory",
+      "mcp"
+    ]
+  }
+}
