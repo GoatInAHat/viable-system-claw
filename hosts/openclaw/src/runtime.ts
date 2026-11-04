@@ -121,7 +121,8 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
     // A succeeded effect still needs a correlated post-action readback before the
     // channel re-opens. The same sampler supplies that environment observation.
     for (const effect of Object.values(service.state.effects)) {
-      if (effect.status !== 'succeeded' || effect.environmentReturn) continue;
+      // Failure is terminal too; the environment brake still needs a readback.
+      if (!['succeeded', 'failed'].includes(effect.status) || effect.environmentReturn) continue;
       const sample = await sampler(clock());
       await service.apply({
         id: `environment/${effect.id}/${sample.at}`,
@@ -282,6 +283,27 @@ export function nativeExecutorFor(
       if (!intent) return undefined;
       return { agentId: intent.agentId, message: intent.message, purpose: intent.purpose, createdAt: intent.createdAt,
         ...(intent.deadline === undefined ? {} : { deadline: intent.deadline }) };
+    },
+    assertAdmission: async request => {
+      if (!options.store) return false;
+      const observed = await options.store.observe(VSM_DOCUMENT_KEY);
+      const state = readDocument(observed.value)?.state;
+      const effect = state?.effects[request.effectId];
+      const grant = state?.grants[request.grant.id];
+      if (!state || !effect || !grant) return false;
+      if (effect.status !== 'reserved' || effect.grantId !== request.grant.id
+        || effect.grantVersion !== request.grant.version) return false;
+      if (grant.revokedAt !== null || grant.version !== request.grant.version) return false;
+      const now = clock();
+      return now >= grant.validFrom && now < grant.validUntil;
+    },
+    // A visible, non-empty terminal reply is the minimum evidence that the authorized
+    // deliverable exists; process success alone is not an outcome.
+    evaluate: outcome => {
+      const delivered = outcome.terminalReply?.disposition === 'visible'
+        && (outcome.terminalReply.textCharacters ?? 0) > 0;
+      const ok = outcome.status === 'ok' && delivered;
+      return { value: ok ? 1 : 0, success: ok };
     },
     resolveReceipt: async request => {
       if (!options.store) return undefined;

@@ -1,4 +1,12 @@
 import { assertJson, canGrant, canValue, grantAdmits, isPrincipal, validateState } from './kernel.js';
+
+/**
+ * Bounded replay window. Authoritative effects, alarms, grants and audit findings are
+ * never dropped; only diagnostic decisions, dedupe IDs and evidence references age out.
+ */
+export const HISTORY_LIMITS = { decisions: 512, seenEvents: 1024, channelEvidence: 64 } as const;
+const bounded = <T,>(values: T[], max: number): T[] => values.length <= max ? values : values.slice(-max);
+
 import type { Actor, AuditFinding, Channel, Decision, DispatchAction, Effect, Grant, Id, StepResult, ValidationError, VsmAction, VsmEvent, VsmState } from './types.js';
 
 class Rejection extends Error { constructor(readonly code: string, message: string) { super(message); } }
@@ -45,6 +53,7 @@ export function step(state: VsmState, event: VsmEvent, now: number): StepResult 
   const record = (kind: Decision['kind'], channel: Channel | null, detail: string, brakes = { evidence: false, environment: false, grant: false }, wakeClass = channel?.wakeClass ?? 'fast-code'): void => {
     const decision: Decision = { eventId: event.id, at: now, channelId: channel?.id ?? null, kind, wakeClass, detail, ...brakes };
     decisions.push(decision); s.decisions.push(decision);
+    if (s.decisions.length > HISTORY_LIMITS.decisions) s.decisions.splice(0, s.decisions.length - HISTORY_LIMITS.decisions);
   };
   const channel = (id: Id): Channel => { need(Object.hasOwn(s.channels, id), 'CHANNEL_UNKNOWN', id); return s.channels[id]; };
   const effect = (id: Id): Effect => { need(Object.hasOwn(s.effects, id), 'EFFECT_UNKNOWN', id); return s.effects[id]; };
@@ -102,7 +111,9 @@ export function step(state: VsmState, event: VsmEvent, now: number): StepResult 
     const a = c.accumulator;
     a.value = Math.max(0, a.value - c.decayPerMs * (now - a.updatedAt));
     a.updatedAt = now;
-    a.evidenceRefs = unique([...a.evidenceRefs, datum.evidenceRef]);
+    // Working-set evidence for the live accumulator; authoritative refs stay on effects,
+    // alarms and audit findings, which are never trimmed.
+    a.evidenceRefs = bounded(unique([...a.evidenceRefs, datum.evidenceRef]), HISTORY_LIMITS.channelEvidence);
     if (datum.index < c.filter.minIndex || c.filter.topics.length > 0 && !c.filter.topics.includes(datum.topic)) {
       a.filtered++;
       record('filtered', c, `Normal datum filtered; evidence pointer retained: ${datum.evidenceRef}`);
@@ -228,7 +239,9 @@ export function step(state: VsmState, event: VsmEvent, now: number): StepResult 
       }
       case 'restart': {
         for (const e of Object.values(s.effects)) {
-          if (['reserved', 'accepted', 'ambiguous', 'lost'].includes(e.status) || !!e.outcome && !e.environmentReturn) {
+          // A proven no-launch ('lost') is already resolved; re-reconciling it would
+          // turn known absence back into ambiguity.
+          if (['reserved', 'accepted', 'ambiguous'].includes(e.status) || !!e.outcome && !e.environmentReturn) {
             if (e.status === 'reserved') e.status = 'ambiguous';
             actions.push({ type: 'reconcile', effectId: e.id });
           }
@@ -317,6 +330,10 @@ export function step(state: VsmState, event: VsmEvent, now: number): StepResult 
       default: throw new Rejection('EVENT_UNKNOWN', 'Unknown event type');
     }
     s.updatedAt = now; s.revision++; s.seenEvents[event.id] = now;
+    const seenKeys = Object.keys(s.seenEvents);
+    if (seenKeys.length > HISTORY_LIMITS.seenEvents) {
+      for (const key of seenKeys.slice(0, seenKeys.length - HISTORY_LIMITS.seenEvents)) delete s.seenEvents[key];
+    }
     const errors = validateState(s, state);
     if (errors.length) return reject(errors);
     return { state: s, actions, decisions, errors: [] };

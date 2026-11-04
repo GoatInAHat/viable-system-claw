@@ -19,12 +19,23 @@ export interface NativeAdapterOptions {
   now?: () => number;
   /** Metadata-only diagnostics; never logs message or purpose text. */
   log?: (detail: string) => void;
+  /**
+   * Live pre-launch authority fence. Runs after the intent marker and immediately
+   * before the native call; false means the grant no longer admits this effect.
+   */
+  assertAdmission?: (request: DispatchRequest) => Promise<boolean>;
+  /** Evaluates the authorized deliverable instead of trusting process completion. */
+  evaluate?: (outcome: EffectOutcome) => { value: number; success: boolean };
 }
 
 export function createNativeExecutor(options: NativeAdapterOptions): NativeExecutor {
   const now = options.now ?? Date.now;
   return {
     async dispatch(request: DispatchRequest): Promise<ExecutionResult> {
+      if (options.assertAdmission && !await options.assertAdmission(request)) {
+        options.log?.(`admission-closed ${request.effectId}`);
+        return { status: 'not-launched' };
+      }
       const resolved = await options.resolveIntent(request);
       if (!resolved) {
         options.log?.(`no-intent ${request.effectId}`);
@@ -65,8 +76,11 @@ export function createNativeExecutor(options: NativeAdapterOptions): NativeExecu
       }
       options.log?.(`reconcile ${outcome.status} ${outcome.terminal ? 'terminal' : 'pending'} ${request.effectId}`);
       if (!outcome.terminal) return { status: 'unknown' };
-      const success = outcome.status === 'ok';
-      const value = success ? 1 : 0;
+      const evaluated = options.evaluate
+        ? options.evaluate(outcome)
+        : { value: outcome.status === 'ok' ? 1 : 0, success: outcome.status === 'ok' };
+      const success = evaluated.success;
+      const value = evaluated.value;
       const evidenceRef = outcome.resultRef?.runId
         ? `run:${outcome.resultRef.runId}`
         : `run:${receipt.runId}`;
