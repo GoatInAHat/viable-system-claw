@@ -26,6 +26,11 @@ export interface NativeAdapterOptions {
   assertAdmission?: (request: DispatchRequest) => Promise<boolean>;
   /** Evaluates the authorized deliverable instead of trusting process completion. */
   evaluate?: (outcome: EffectOutcome) => { value: number; success: boolean };
+  /**
+   * Authoritative probe for a reservation that has no receipt. 'absent' means the
+   * native session holds no work and the launch may be treated as not started.
+   */
+  probeLaunch?: (request: ReconcileRequest) => Promise<'absent' | 'present' | 'unknown'>;
 }
 
 export function createNativeExecutor(options: NativeAdapterOptions): NativeExecutor {
@@ -66,7 +71,11 @@ export function createNativeExecutor(options: NativeAdapterOptions): NativeExecu
     },
     async reconcile(request: ReconcileRequest): Promise<ExecutionResult> {
       const receipt = await options.resolveReceipt?.(request);
-      if (!receipt || receipt.status !== 'accepted' || !request.nativeId) return { status: 'unknown' };
+      if (!receipt || receipt.status !== 'accepted' || !request.nativeId) {
+        const probe = await options.probeLaunch?.(request);
+        if (probe === 'absent') return { status: 'not-launched' };
+        return { status: 'unknown' };
+      }
       let outcome: EffectOutcome;
       try {
         outcome = await options.executor.reconcile(receipt);

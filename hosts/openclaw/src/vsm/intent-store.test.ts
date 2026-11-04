@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assertIntent, intentKey, readIntent, writeIntent } from './intent-store.js';
+import { assertIntent, intentKey, readIntent, writeIntent, type StoredIntent } from './intent-store.js';
 import type { DocumentStore } from './state.js';
 import type { EffectIntent } from '../execution/types.js';
 
@@ -14,9 +14,10 @@ class MemoryStore implements DocumentStore {
   }
 }
 
-const intent = (overrides: Partial<EffectIntent> = {}): EffectIntent => ({
+const intent = (overrides: Partial<StoredIntent> = {}): StoredIntent => ({
   id: 'a/environment/return/effect/1', unitId: 'a', procedureId: 'a/probe', agentId: 'canary',
   message: 'Report host health in one line.', purpose: 'canary probe', grantRef: 'g:1', createdAt: 10,
+  sessionKey: 'agent:canary:subagent:viable-system-claw-effect-abc',
   ...overrides,
 });
 
@@ -50,5 +51,6 @@ describe('private launch intent', () => {
     expect(() => assertIntent(intent({ createdAt: -1 }))).toThrow('VSC_INTENT_TIME');
     expect(() => assertIntent(intent({ deadline: 5 }))).toThrow('VSC_INTENT_DEADLINE');
     expect(() => assertIntent(intent({ message: 'x'.repeat(40_000) }))).toThrow('VSC_INTENT_MESSAGE');
+    expect(() => assertIntent(intent({ sessionKey: 'bad key' }))).toThrow('VSC_INTENT_SESSION');
   });
 });

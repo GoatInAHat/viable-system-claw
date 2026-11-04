@@ -174,6 +174,26 @@ describe('canary runtime', () => {
     await runtime.stop();
   });
 
+
+  it('raises a durable alarm for an ambiguous launch without a receipt', async () => {
+    const store = new MemoryStore();
+    const privateStore = new MemoryStore();
+    const config = { ...base, agentId: 'canary' };
+    await ensureRootState(store, config, 10);
+    const ambiguous: NativeExecutor = {
+      async dispatch() { return { status: 'unknown' }; },
+      async reconcile() { return { status: 'unknown' }; },
+    };
+    const runtime = buildRuntime({ config, store, privateStore, executor: ambiguous, clock: () => 100, sampler: faulty });
+    await runtime.start();
+    await runtime.sampleOnce();
+    await runtime.reconcileOnce();
+    const alarms = Object.values(runtime.service.state.alarms);
+    expect(alarms.map(a => a.class)).toContain('runtime.unresolved-launch');
+    expect(alarms.every(a => a.state === 'raised')).toBe(true);
+    await runtime.stop();
+  });
+
   it('reconciles accepted probe work on the periodic pass', async () => {
     const store = new MemoryStore();
     const privateStore = new MemoryStore();

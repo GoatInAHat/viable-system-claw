@@ -1,6 +1,9 @@
 import { EXECUTION_LIMITS, type EffectIntent } from '../execution/types.js';
 import type { DocumentStore } from './state.js';
 
+/** Intent plus the deterministic native session identity used for crash recovery. */
+export type StoredIntent = EffectIntent & { sessionKey: string };
+
 /** Private retained namespace for launch intents; never projected into the public graph. */
 export const INTENT_NAMESPACE = 'vsm-private';
 export const intentKey = (effectId: string): string => `intent/${effectId}`;
@@ -13,7 +16,7 @@ function valid(value: unknown, limit: number, pattern: RegExp = REFERENCE): valu
 }
 
 /** Rejects records that cannot be safely persisted or replayed. */
-export function assertIntent(intent: EffectIntent): void {
+export function assertIntent(intent: StoredIntent): void {
   if (!valid(intent.id, EXECUTION_LIMITS.id) || !valid(intent.unitId, EXECUTION_LIMITS.id)
     || !valid(intent.procedureId, EXECUTION_LIMITS.id) || !valid(intent.grantRef, EXECUTION_LIMITS.id)) {
     throw new Error('VSC_INTENT_IDENTITY');
@@ -26,22 +29,27 @@ export function assertIntent(intent: EffectIntent): void {
     || intent.message.length > EXECUTION_LIMITS.message) {
     throw new Error('VSC_INTENT_MESSAGE');
   }
+  if (typeof intent.sessionKey !== 'string' || intent.sessionKey.length === 0
+    || intent.sessionKey.length > 512 || !/^[A-Za-z0-9][A-Za-z0-9:._/-]*$/.test(intent.sessionKey)) {
+    throw new Error('VSC_INTENT_SESSION');
+  }
   if (!Number.isSafeInteger(intent.createdAt) || intent.createdAt < 0) throw new Error('VSC_INTENT_TIME');
   if (intent.deadline !== undefined && (!Number.isSafeInteger(intent.deadline) || intent.deadline < intent.createdAt)) {
     throw new Error('VSC_INTENT_DEADLINE');
   }
 }
 
-function sameIntent(left: EffectIntent, right: EffectIntent): boolean {
+function sameIntent(left: StoredIntent, right: StoredIntent): boolean {
   return left.id === right.id && left.unitId === right.unitId && left.procedureId === right.procedureId
     && left.agentId === right.agentId && left.message === right.message && left.purpose === right.purpose
-    && left.grantRef === right.grantRef && left.createdAt === right.createdAt && left.deadline === right.deadline;
+    && left.grantRef === right.grantRef && left.createdAt === right.createdAt && left.deadline === right.deadline
+    && left.sessionKey === right.sessionKey;
 }
 
-function readIntentValue(value: unknown): EffectIntent | undefined {
+function readIntentValue(value: unknown): StoredIntent | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'object') throw new Error('VSC_INTENT_INVALID');
-  const intent = value as EffectIntent;
+  const intent = value as StoredIntent;
   assertIntent(intent);
   return intent;
 }
@@ -50,7 +58,7 @@ function readIntentValue(value: unknown): EffectIntent | undefined {
  * Write-once launch marker. It is committed before the native executor is called, so a
  * crash between admission and dispatch leaves recoverable intent rather than a guess.
  */
-export async function writeIntent(store: DocumentStore, intent: EffectIntent): Promise<void> {
+export async function writeIntent(store: DocumentStore, intent: StoredIntent): Promise<void> {
   assertIntent(intent);
   const key = intentKey(intent.id);
   const observed = await store.observe(key);
@@ -64,7 +72,7 @@ export async function writeIntent(store: DocumentStore, intent: EffectIntent): P
   if (result.status !== 'applied') throw new Error('VSC_INTENT_CONFLICT');
 }
 
-export async function readIntent(store: DocumentStore, effectId: string): Promise<EffectIntent | undefined> {
+export async function readIntent(store: DocumentStore, effectId: string): Promise<StoredIntent | undefined> {
   const observed = await store.observe(intentKey(effectId));
   return readIntentValue(observed.value);
 }
