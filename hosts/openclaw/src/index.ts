@@ -5,12 +5,13 @@ import { planPage } from './backend/plan-page.js';
 import { Backend } from './backend/backend.js';
 import { planAllocation } from './compute/index.js';
 import { fromNativeEvent, fromSessionSend, metadataId, type Observation } from './backend/events.js';
+import { buildRuntime, ensureRootState, nativeExecutorFor, readRuntimeConfig } from './runtime.js';
 
 const agentAccess = (context: FeatureInvocationContext) => context.source === 'session-action' && context.action.client?.allowsAgent
   ? (agentId: string) => context.action.client!.allowsAgent!(agentId) : undefined;
 
 export { contract } from './contract.js';
-export default defineFeaturePlugin({
+const plugin = defineFeaturePlugin({
   contract,
   name: 'Viable System Claw',
   description: 'Explicit organizational graph, metadata activity projection and compute observations.',
@@ -37,6 +38,21 @@ export default defineFeaturePlugin({
         }
       }
     };
+    // The durable runtime is opt-in per plugin config; absent config adds no timers or stores.
+    const runtimeConfig = readRuntimeConfig(api.pluginConfig);
+    if (runtimeConfig) {
+      const clock = () => Date.now();
+      const vsmStore = api.runtime.state.openKeyedStoreV2({ namespace: 'vsm', retention: 'retained' });
+      const runtime = buildRuntime({
+        config: runtimeConfig, store: vsmStore, executor: nativeExecutorFor(api, clock), clock,
+        onAlarm: action => api.logger.warn(`VSC alarm ${action.alarmId} raised for ${action.principalId}`),
+      });
+      api.registerService({
+        id: 'viable-system-claw:runtime',
+        async start() { await ensureRootState(vsmStore, runtimeConfig, clock()); await runtime.start(); },
+        async stop() { await runtime.stop(); },
+      });
+    }
     api.registerService({
       id: 'viable-system-claw:backend',
       async start() { reportedFailure = false; await backend.start(); },
@@ -102,3 +118,4 @@ export default defineFeaturePlugin({
     };
   },
 });
+export default plugin;
