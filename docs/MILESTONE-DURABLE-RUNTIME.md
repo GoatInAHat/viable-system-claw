@@ -55,3 +55,13 @@ Implement inside `hosts/openclaw/src/vsm/` only:
 - UI panel for the runtime view.
 - Disposable-gateway qualification.
 - Any repair action by the canary.
+
+## Addendum (2026-11-04, part 3)
+
+Result retention, alarm dedupe and outcome evaluation are now implemented on top of this milestone's slice:
+
+- `EffectReconciler` accepts an optional `privateResultSink`; the production runtime supplies an idempotent sink backed by the retained `vsm-private` namespace. Terminal message history and visible terminal replies are retained per effect, bounded, and effect-correlated.
+- `nativeExecutorFor` forwards the sink into the native executor. The production `evaluate` callback scores success only when the terminal reply is visible and non-empty.
+- The `onAlarm` sink dedupes delivery by alarm identity and `raisedAt`, so restart passes re-emit without re-delivering.
+
+Evidence: `docs/QUALIFICATION.md` part 3. Not yet open: principal alarm delivery with acknowledgment, `audit.inspect` scheduling at `returnDueAt`, actuator-level grant enforcement.
