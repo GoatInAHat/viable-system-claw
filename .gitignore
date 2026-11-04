@@ -111,3 +111,5 @@ lpt[1-9].*
 .next/
 *.pyc
 vendor/
+
+node_modules
