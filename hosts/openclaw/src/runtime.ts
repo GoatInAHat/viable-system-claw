@@ -301,6 +301,7 @@ export function nativeExecutorFor(
       // missing agent when the launch is attempted.
       agentExists: id => options.agentId !== undefined && id === options.agentId,
       now: clock,
+      ...(options.privateResultSink ? { privateResultSink: options.privateResultSink } : {}),
     }),
     resolveIntent: async request => {
       if (!options.privateStore) return undefined;
