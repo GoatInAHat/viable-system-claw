@@ -77,3 +77,21 @@ Each reply was produced by a real subagent run, not a synthetic stub. Receipt id
 - Any purpose other than the read-only canary.
 
 Cleanup: every disposable Gateway was stopped after its run. The isolated state directories remain as local evidence and are not part of production state.
+
+## Part 3: result retention, alarm dedupe and evaluated outcomes
+
+Commits `d8965a8` and `0d8d35e` (both pushed to `main`) closed three review findings from `.agents/local/astra-review-2.md`:
+
+1. **Native result payloads are retained.** `EffectReconciler` now writes each terminal effect's bounded message history and visible terminal reply to an explicit idempotent private sink (`@retained.vsm-private/vsc-private-result:<sha256(effectId, runId)>`), and `nativeExecutorFor` forwards the sink into the native executor. A first wiring attempt constructed the sink in `index.ts` but never passed it through `nativeExecutorFor`; a fresh disposable run showed zero stored payloads, which caught the dead wiring before any claim.
+2. **Alarm re-delivery is deduped.** The `onAlarm` sink delivers each `alarm.id` + `raisedAt` pair once per process, so restart passes re-emitting unacknowledged alarms no longer re-deliver every finding.
+3. **Outcomes are evaluated, not assumed.** The runtime's `evaluate` maps native `ok` to success only when the terminal reply is visible and non-empty, so a silent or empty completion no longer scores as a verified diagnostic.
+
+Verification (fresh disposable Gateway `/tmp/vsc-qual-8`, port 18890, isolated state, `VSC_RUNTIME_AGENT_ID=main`, closed-port readiness fault):
+
+- 251 tests and `tsc --noEmit` pass on the changed source.
+- Effects 1-3 completed `succeeded` with outcome 1; effect 4 accepted, pending reconciliation; alarm `canary.host-health` raised once in the log (single delivery, no re-emission).
+- Retained private state holds one intent marker (432 bytes) and one stored result payload per completed effect. The stored payload for effect 1 contains 4 messages, `truncated: false`, and a visible terminal reply with the real host diagnosis: "Host is up 4d 21h; load ~4.8-5.1, memory 10.9/15.4 GB used (4.5 GB available), but root filesystem is the concern at **95% used (26 GB free)** - worth pruning soon."
+- Every stored payload is effect-correlated (`effectId`, `runId`, `sessionKey`, `storedAt`), so audit can join action, diagnosis and delivery without re-reading the native transcript.
+- Gateway stopped after the run; isolated state kept as local evidence only.
+
+Still open from the review: grant enforcement at the actual actuator (revocation race, `capabilities` not carried into native tool execution), crash-window recovery for reservations without receipts, failed-run environment readback, `audit.inspect` scheduling at `returnDueAt`, alarm acknowledgment and principal delivery, monolithic history bounds, compute-stewardship connection, and recursive adaptation.
