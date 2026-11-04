@@ -13,7 +13,7 @@ export interface DispatchRequest {
 }
 export interface ReconcileRequest { effectId: Id; nativeId: string | null }
 export type ExecutionResult =
-  | { status: 'accepted'; nativeId: string }
+  | { status: 'accepted'; nativeId: string; sessionKey?: string }
   | { status: 'completed'; nativeId: string; outcome: EffectOutcome; success: boolean; environmentEvidenceRef: Id | null }
   | { status: 'unknown' }
   /** Only authoritative proof of no launch; unavailable/not-found-with-eventual-consistency is unknown. */
@@ -41,7 +41,9 @@ export function executionEvents(effectId: Id, result: ExecutionResult, sourceId:
     id: `${sourceId}/reconciled`, type: 'effect.reconciled', effectId,
     result: result.status === 'unknown' ? 'unknown' : 'not-launched',
   }];
-  const events: VsmEvent[] = [{ id: `${sourceId}/accepted`, type: 'effect.accepted', effectId, nativeId: result.nativeId }];
+  const sessionKey = 'sessionKey' in result ? result.sessionKey : undefined;
+  const events: VsmEvent[] = [{ id: `${sourceId}/accepted`, type: 'effect.accepted', effectId, nativeId: result.nativeId,
+    ...(sessionKey === undefined ? {} : { sessionKey }) }];
   if (result.status === 'completed') {
     events.push({ id: `${sourceId}/outcome`, type: 'effect.outcome', effectId, value: result.outcome.value, evidenceRef: result.outcome.evidenceRef, success: result.success });
     if (result.environmentEvidenceRef !== null) events.push({ id: `${sourceId}/environment`, type: 'environment.returned', effectId, evidenceRef: result.environmentEvidenceRef });

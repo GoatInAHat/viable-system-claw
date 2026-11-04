@@ -99,7 +99,7 @@ export interface Effect {
   cost: number;
   expectedOutcome: number;
   returnDueAt: number;
-  receipt: { nativeId: string; acceptedAt: number } | null;
+  receipt: { nativeId: string; sessionKey?: string; acceptedAt: number } | null;
   outcome: EffectOutcome | null;
   environmentReturn: { evidenceRef: Id; at: number } | null;
   evidenceRefs: Id[];
@@ -193,7 +193,7 @@ export type VsmEvent = { id: Id } & (
   | { type: 'grant.changed'; actor: Actor; grant: Grant }
   | { type: 'grant.revoked'; actor: Actor; grantId: Id; version: number }
   | { type: 'effect.admit'; effectId: Id }
-  | { type: 'effect.accepted'; effectId: Id; nativeId: string }
+  | { type: 'effect.accepted'; effectId: Id; nativeId: string; sessionKey?: string }
   | { type: 'effect.ambiguous'; effectId: Id }
   | { type: 'effect.outcome'; effectId: Id; value: number; evidenceRef: Id; success: boolean }
   | { type: 'environment.returned'; effectId: Id; evidenceRef: Id }

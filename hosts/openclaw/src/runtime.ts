@@ -60,6 +60,7 @@ export interface VsmRuntimeOptions {
   clock?: () => number;
   sampler?: (now: number) => Promise<CanarySample>;
   onAlarm?: (action: Extract<VsmAction, { type: 'alarm' }>, state: VsmState) => void;
+  log?: (detail: string) => void;
   intervalMs?: number;
   channelId?: string;
   readyzUrl?: string;
@@ -71,6 +72,7 @@ export interface VsmRuntime {
   start(): Promise<void>;
   stop(): Promise<void>;
   sampleOnce(): Promise<void>;
+  reconcileOnce(): Promise<void>;
 }
 
 export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
@@ -96,7 +98,7 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
           agentId: options.config.agentId!,
           message: `Observe host health for ${request.effectId}. Reply with one short status line and no file changes.`,
           purpose: procedure?.executionRef ?? 'canary probe',
-          grantRef: `${request.grant.id}@${request.grant.version}`,
+          grantRef: `${request.grant.id}:${request.grant.version}`,
           createdAt: clock(),
         };
         await writeIntent(options.privateStore!, intent);
@@ -105,6 +107,27 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
     } : {}),
   });
   let timer: ReturnType<typeof setInterval> | null = null;
+
+  async function reconcileOnce(): Promise<void> {
+    try {
+      await service.apply({ id: `reconcile/${clock()}`, type: 'restart' });
+    } catch (error) {
+      options.log?.(`reconcile-failed ${(error instanceof Error ? error.name : 'unknown').slice(0, 40)}`);
+      return;
+    }
+    // A succeeded effect still needs a correlated post-action readback before the
+    // channel re-opens. The same sampler supplies that environment observation.
+    for (const effect of Object.values(service.state.effects)) {
+      if (effect.status !== 'succeeded' || effect.environmentReturn) continue;
+      const sample = await sampler(clock());
+      await service.apply({
+        id: `environment/${effect.id}/${sample.at}`,
+        type: 'environment.returned',
+        effectId: effect.id,
+        evidenceRef: `canary:${sample.at}:readback:${effect.id}`,
+      });
+    }
+  }
 
   async function sampleOnce(): Promise<void> {
     const now = clock();
@@ -128,7 +151,12 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
     async start() {
       await service.start();
       if (timer === null && (options.intervalMs ?? CANARY_INTERVAL_MS) > 0) {
-        timer = setInterval(() => { void sampleOnce().catch(() => undefined); }, options.intervalMs ?? CANARY_INTERVAL_MS);
+        timer = setInterval(() => {
+          void (async () => {
+            await sampleOnce().catch(() => undefined);
+            await reconcileOnce().catch(() => undefined);
+          })();
+        }, options.intervalMs ?? CANARY_INTERVAL_MS);
       }
     },
     async stop() {
@@ -136,6 +164,7 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
       await service.stop();
     },
     sampleOnce,
+    reconcileOnce,
   };
 }
 
@@ -209,8 +238,10 @@ function seedChannels(state: VsmState, config: VsmRuntimeConfig): VsmState {
 
 export function nativeExecutorFor(
   api: OpenClawPluginApi, clock: () => number, options: {
+    store?: DocumentStore;
     privateStore?: DocumentStore;
     agentId?: string;
+    log?: (detail: string) => void;
   } = {},
 ): NativeExecutor {
   return createNativeExecutor({
@@ -227,6 +258,17 @@ export function nativeExecutorFor(
       return { agentId: intent.agentId, message: intent.message, purpose: intent.purpose, createdAt: intent.createdAt,
         ...(intent.deadline === undefined ? {} : { deadline: intent.deadline }) };
     },
+    resolveReceipt: async request => {
+      if (!options.store) return undefined;
+      const observed = await options.store.observe(VSM_DOCUMENT_KEY);
+      const effect = readDocument(observed.value)?.state.effects[request.effectId];
+      if (!effect?.receipt?.sessionKey) return undefined;
+      return {
+        effectId: request.effectId, status: 'accepted', runId: effect.receipt.nativeId,
+        sessionKey: effect.receipt.sessionKey, at: effect.receipt.acceptedAt,
+      };
+    },
     now: clock,
+    log: options.log,
   });
 }

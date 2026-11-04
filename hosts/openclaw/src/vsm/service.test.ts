@@ -126,6 +126,25 @@ describe('durable VSM service', () => {
 
 
 
+
+  it('re-opens the channel after a proven no-launch, so a later observation can dispatch', async () => {
+    const store = new MemoryStore();
+    await bootstrapDocument(store, ready());
+    let dispatches = 0;
+    const executor: NativeExecutor = {
+      async dispatch() { dispatches++; return { status: 'not-launched' }; },
+      async reconcile() { return { status: 'unknown' }; },
+    };
+    const service = new VsmService({ store, executor, clock: () => 100 });
+    await service.start();
+    await service.apply(obs('fire'));
+    const first = Object.keys(service.state.effects)[0];
+    expect(service.state.effects[first].status).toBe('lost');
+    await service.apply(obs('fire-again'));
+    expect(Object.keys(service.state.effects)).toHaveLength(2);
+    expect(dispatches).toBe(2);
+  });
+
   it('commits the private launch intent before calling the executor', async () => {
     const store = new MemoryStore();
     await bootstrapDocument(store, ready());

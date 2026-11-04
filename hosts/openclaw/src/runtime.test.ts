@@ -129,6 +129,33 @@ describe('canary runtime', () => {
     await runtime.stop();
   });
 
+
+  it('reconciles accepted probe work on the periodic pass', async () => {
+    const store = new MemoryStore();
+    const privateStore = new MemoryStore();
+    const config = { ...base, agentId: 'canary' };
+    await ensureRootState(store, config, 10);
+    const dispatching: NativeExecutor = {
+      async dispatch() { return { status: 'accepted', nativeId: 'run-probe-9', sessionKey: 'agent:canary:subagent:x' }; },
+      async reconcile() {
+        return {
+          status: 'completed', nativeId: 'run-probe-9',
+          outcome: { value: 1, evidenceRef: 'run:run-probe-9', at: 110 }, success: true,
+          environmentEvidenceRef: 'evidence:env-probe',
+        };
+      },
+    };
+    const runtime = buildRuntime({ config, store, privateStore, executor: dispatching, clock: () => 100, sampler: faulty });
+    await runtime.start();
+    await runtime.sampleOnce();
+    const effectId = Object.keys(runtime.service.state.effects)[0];
+    expect(runtime.service.state.effects[effectId].receipt?.sessionKey).toBe('agent:canary:subagent:x');
+    await runtime.reconcileOnce();
+    expect(runtime.service.state.effects[effectId].status).toBe('succeeded');
+    expect(runtime.service.state.effects[effectId].environmentReturn?.evidenceRef).toBe('evidence:env-probe');
+    await runtime.stop();
+  });
+
   it('commits a private intent and dispatches the probe when a fault crosses the threshold', async () => {
     const store = new MemoryStore();
     const privateStore = new MemoryStore();

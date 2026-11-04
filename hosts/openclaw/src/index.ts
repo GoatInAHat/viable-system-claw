@@ -48,8 +48,12 @@ const plugin = defineFeaturePlugin({
         : undefined;
       const runtime = buildRuntime({
         config: runtimeConfig, store: vsmStore, privateStore, clock,
-        executor: nativeExecutorFor(api, clock, { privateStore, agentId: runtimeConfig.agentId }),
+        executor: nativeExecutorFor(api, clock, {
+          store: vsmStore, privateStore, agentId: runtimeConfig.agentId,
+          log: detail => api.logger.warn(`VSC native dispatch ${detail}`),
+        }),
         onAlarm: action => api.logger.warn(`VSC alarm ${action.alarmId} raised for ${action.principalId}`),
+        log: detail => api.logger.warn(`VSC runtime ${detail}`),
       });
       api.registerService({
         id: 'viable-system-claw:runtime',

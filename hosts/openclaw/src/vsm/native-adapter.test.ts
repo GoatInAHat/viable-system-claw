@@ -36,7 +36,7 @@ describe('native adapter', () => {
   it('reports acceptance with the durable native identity', async () => {
     const { executor } = fakeExecutor(accepted);
     const native = createNativeExecutor({ executor, resolveIntent: () => intent });
-    expect(await native.dispatch(request)).toEqual({ status: 'accepted', nativeId: 'run-1' });
+    expect(await native.dispatch(request)).toEqual({ status: 'accepted', nativeId: 'run-1', sessionKey: 'agent:canary:subagent:x' });
   });
 
   it('treats a thrown dispatch as unknown, not as absence', async () => {

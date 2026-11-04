@@ -16,7 +16,7 @@ class MemoryStore implements DocumentStore {
 
 const intent = (overrides: Partial<EffectIntent> = {}): EffectIntent => ({
   id: 'a/environment/return/effect/1', unitId: 'a', procedureId: 'a/probe', agentId: 'canary',
-  message: 'Report host health in one line.', purpose: 'canary probe', grantRef: 'g@1', createdAt: 10,
+  message: 'Report host health in one line.', purpose: 'canary probe', grantRef: 'g:1', createdAt: 10,
   ...overrides,
 });
 

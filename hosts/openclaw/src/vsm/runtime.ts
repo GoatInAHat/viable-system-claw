@@ -13,7 +13,8 @@ export function effectiveThreshold(state: VsmState, channel: Channel): number {
 function environmentReady(s: VsmState, c: Channel): boolean {
   if (c.pending.lastEffectId === null) return true;
   const e = s.effects[c.pending.lastEffectId];
-  return !!e && (e.status === 'cancelled' || !!e.environmentReturn && !!e.outcome);
+  // A definitively absent launch never touched the world, so it re-opens the round trip.
+  return !!e && (e.status === 'cancelled' || e.status === 'lost' || !!e.environmentReturn && !!e.outcome);
 }
 function parentAuditActor(s: VsmState, actor: Actor, unitId: Id): boolean {
   return isPrincipal(s, actor) || actor.kind === 'organ' && actor.role === 'S3*' &&
@@ -111,11 +112,11 @@ export function step(state: VsmState, event: VsmEvent, now: number): StepResult 
     a.observations++;
     return true;
   };
-  const accepted = (e: Effect, nativeId: string): void => {
+  const accepted = (e: Effect, nativeId: string, sessionKey?: string): void => {
     need(nativeId.length > 0, 'RECEIPT_INVALID', 'Native receipt ID required');
     need(e.status !== 'intent' && e.status !== 'cancelled', 'EFFECT_TRANSITION', 'Cannot accept unreserved/cancelled effect');
     if (e.receipt) need(e.receipt.nativeId === nativeId, 'RECEIPT_CONFLICT', 'Stable effect maps to one native receipt');
-    else e.receipt = { nativeId, acceptedAt: now };
+    else e.receipt = { nativeId, acceptedAt: now, ...(sessionKey === undefined ? {} : { sessionKey }) };
     if (!e.outcome) e.status = 'accepted';
   };
   try {
@@ -185,7 +186,7 @@ export function step(state: VsmState, event: VsmEvent, now: number): StepResult 
         if (evidence && g) reserve(c, e, g);
         break;
       }
-      case 'effect.accepted': accepted(effect(event.effectId), event.nativeId); break;
+      case 'effect.accepted': accepted(effect(event.effectId), event.nativeId, event.sessionKey); break;
       case 'effect.ambiguous': {
         const e = effect(event.effectId);
         need(e.status !== 'intent', 'EFFECT_TRANSITION', 'Unreserved intent cannot have ambiguous launch');
