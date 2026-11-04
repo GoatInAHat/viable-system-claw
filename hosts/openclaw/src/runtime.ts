@@ -6,6 +6,7 @@ import { VsmService } from './vsm/service.js';
 import { step } from './vsm/runtime.js';
 import { bootstrapDocument, changeDocument, readDocument, VSM_DOCUMENT_KEY, type DocumentStore } from './vsm/state.js';
 import { readIntent, writeIntent } from './vsm/intent-store.js';
+import { effectSessionKey } from './execution/native.js';
 import { CANARY_THRESHOLDS, canaryObservations, sampleCanary, type CanarySample } from './vsm/canary.js';
 import type { NativeExecutor } from './vsm/executor.js';
 import type { VsmAction, VsmState } from './vsm/types.js';
@@ -102,6 +103,7 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
           purpose: procedure?.executionRef ?? 'canary probe',
           grantRef: `${request.grant.id}:${request.grant.version}`,
           createdAt: clock(),
+          sessionKey: effectSessionKey(request.effectId, options.config.agentId!),
         };
         await writeIntent(options.privateStore!, intent);
         return intent;
@@ -121,7 +123,25 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
     // A succeeded effect still needs a correlated post-action readback before the
     // channel re-opens. The same sampler supplies that environment observation.
     for (const effect of Object.values(service.state.effects)) {
-      if (effect.status !== 'succeeded' || effect.environmentReturn) continue;
+      if (effect.status === 'ambiguous' && !effect.receipt) {
+        const alarmId = `alarm/unresolved/${effect.id}`;
+        if (!service.state.alarms[alarmId]) {
+          await service.apply({
+            id: `unresolved/${effect.id}/${clock()}`,
+            type: 'alarm.raised',
+            alarmId,
+            unitId: effect.unitId,
+            alarmClass: 'runtime.unresolved-launch',
+            severity: 1,
+            localThreshold: 1,
+            falseAlarmCost: 1,
+            delayCost: 10,
+            evidenceRef: `effect:${effect.id}`,
+          });
+        }
+      }
+      // Failure is terminal too; the environment brake still needs a readback.
+      if (!['succeeded', 'failed'].includes(effect.status) || effect.environmentReturn) continue;
       const sample = await sampler(clock());
       await service.apply({
         id: `environment/${effect.id}/${sample.at}`,
@@ -282,6 +302,39 @@ export function nativeExecutorFor(
       if (!intent) return undefined;
       return { agentId: intent.agentId, message: intent.message, purpose: intent.purpose, createdAt: intent.createdAt,
         ...(intent.deadline === undefined ? {} : { deadline: intent.deadline }) };
+    },
+    assertAdmission: async request => {
+      if (!options.store) return false;
+      const observed = await options.store.observe(VSM_DOCUMENT_KEY);
+      const state = readDocument(observed.value)?.state;
+      const effect = state?.effects[request.effectId];
+      const grant = state?.grants[request.grant.id];
+      if (!state || !effect || !grant) return false;
+      if (effect.status !== 'reserved' || effect.grantId !== request.grant.id
+        || effect.grantVersion !== request.grant.version) return false;
+      if (grant.revokedAt !== null || grant.version !== request.grant.version) return false;
+      const now = clock();
+      return now >= grant.validFrom && now < grant.validUntil;
+    },
+    // A visible, non-empty terminal reply is the minimum evidence that the authorized
+    // deliverable exists; process success alone is not an outcome.
+    evaluate: outcome => {
+      const delivered = outcome.terminalReply?.disposition === 'visible'
+        && (outcome.terminalReply.textCharacters ?? 0) > 0;
+      const ok = outcome.status === 'ok' && delivered;
+      return { value: ok ? 1 : 0, success: ok };
+    },
+    probeLaunch: async request => {
+      if (!options.privateStore) return 'unknown';
+      const marker = await readIntent(options.privateStore, request.effectId);
+      if (!marker) return 'unknown';
+      try {
+        const history = await api.runtime.subagent.getSessionMessages({ sessionKey: marker.sessionKey, limit: 1 });
+        if (!Array.isArray(history.messages)) return 'unknown';
+        return history.messages.length === 0 ? 'absent' : 'present';
+      } catch {
+        return 'unknown';
+      }
     },
     resolveReceipt: async request => {
       if (!options.store) return undefined;

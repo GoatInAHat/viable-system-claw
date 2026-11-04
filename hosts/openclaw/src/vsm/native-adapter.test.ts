@@ -84,6 +84,53 @@ describe('native adapter', () => {
     });
   });
 
+
+  it('refuses to launch when the live authority fence closes after admission', async () => {
+    const { calls, executor } = fakeExecutor(accepted);
+    const native = createNativeExecutor({
+      executor, resolveIntent: () => intent,
+      assertAdmission: async () => false,
+    });
+    expect(await native.dispatch(request)).toEqual({ status: 'not-launched' });
+    expect(calls.dispatch).toBe(0);
+  });
+
+  it('does not score a silent process success as a delivered outcome', async () => {
+    const silent: EffectOutcome = {
+      effectId: request.effectId, runId: 'run-1', status: 'ok', terminal: true, endedAt: 30,
+      stopReason: 'completed', livenessState: 'ended',
+      terminalReply: { disposition: 'empty', code: 'message-tool-not-called' },
+    };
+    const native = createNativeExecutor({
+      executor: fakeExecutor(accepted, silent).executor, resolveIntent: () => intent, resolveReceipt: () => accepted,
+      evaluate: outcome => {
+        const delivered = outcome.terminalReply?.disposition === 'visible' && (outcome.terminalReply.textCharacters ?? 0) > 0;
+        const ok = outcome.status === 'ok' && delivered;
+        return { value: ok ? 1 : 0, success: ok };
+      },
+    });
+    const result = await native.reconcile({ effectId: request.effectId, nativeId: 'run-1' });
+    expect(result).toMatchObject({ status: 'completed', success: false, outcome: { value: 0 } });
+  });
+
+
+  it('resolves a reservation with no receipt only when the native session proves absence', async () => {
+    const absent = createNativeExecutor({
+      executor: fakeExecutor(accepted).executor, resolveIntent: () => intent, probeLaunch: async () => 'absent',
+    });
+    expect(await absent.reconcile({ effectId: request.effectId, nativeId: null })).toEqual({ status: 'not-launched' });
+
+    const present = createNativeExecutor({
+      executor: fakeExecutor(accepted).executor, resolveIntent: () => intent, probeLaunch: async () => 'present',
+    });
+    expect(await present.reconcile({ effectId: request.effectId, nativeId: null })).toEqual({ status: 'unknown' });
+
+    const unknown = createNativeExecutor({
+      executor: fakeExecutor(accepted).executor, resolveIntent: () => intent, probeLaunch: async () => 'unknown',
+    });
+    expect(await unknown.reconcile({ effectId: request.effectId, nativeId: null })).toEqual({ status: 'unknown' });
+  });
+
   it('keeps a pending observation out of the outcome record', async () => {
     const pending: EffectOutcome = {
       effectId: request.effectId, runId: 'run-1', status: 'unknown', terminal: false, endedAt: null,

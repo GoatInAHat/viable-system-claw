@@ -127,6 +127,26 @@ describe('durable VSM service', () => {
 
 
 
+
+  it('keeps a proven no-launch resolved across a restart', async () => {
+    const store = new MemoryStore();
+    await bootstrapDocument(store, ready());
+    const executor: NativeExecutor = {
+      async dispatch() { return { status: 'not-launched' }; },
+      async reconcile() { return { status: 'unknown' }; },
+    };
+    const service = new VsmService({ store, executor, clock: () => 100 });
+    await service.start();
+    await service.apply(obs('fire'));
+    const first = Object.keys(service.state.effects)[0];
+    expect(service.state.effects[first].status).toBe('lost');
+    await service.apply({ id: 'recover', type: 'restart' });
+    expect(service.state.effects[first].status).toBe('lost');
+    await service.apply(obs('fire-again'));
+    expect(Object.keys(service.state.effects)).toHaveLength(2);
+    await service.stop();
+  });
+
   it('re-opens the channel after a proven no-launch, so a later observation can dispatch', async () => {
     const store = new MemoryStore();
     await bootstrapDocument(store, ready());
@@ -160,7 +180,8 @@ describe('durable VSM service', () => {
         return {
           id: request.effectId, unitId: request.unitId, procedureId: request.procedureId,
           agentId: 'canary', message: 'Report host health.', purpose: 'canary probe',
-          grantRef: `${request.grant.id}@${request.grant.version}`, createdAt: 100,
+          grantRef: `${request.grant.id}:${request.grant.version}`, createdAt: 100,
+          sessionKey: 'agent:canary:subagent:viable-system-claw-effect-abc',
         };
       },
     });
