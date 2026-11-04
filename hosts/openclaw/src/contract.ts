@@ -53,10 +53,49 @@ export const UnitUpsertSchema = Type.Object({ id: IdSchema, parentId: Type.Optio
 export const BindSessionSchema = Type.Object({ unitId: IdSchema, session: Type.Union([SessionSchema, Type.Null()]) }, closed);
 const EmptySchema = Type.Object({}, closed);
 
+const effectStatus = oneOf('intent', 'reserved', 'accepted', 'ambiguous', 'lost', 'succeeded', 'failed', 'cancelled');
+const channelKind = oneOf('V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'metasystemic', 'lateral', 'algedonic', 'environmental', 'local');
+const channelPhase = oneOf('parked', 'evidence', 'waiting-environment', 'waiting-grant', 'reserved');
+const wakeClass = oneOf('fast-code', 'slow-deliberative', 'alarm');
+const VsmExitSchema = Type.Object({ id: IdSchema, declared: Type.Number(), imputed: Type.Number(), error: Type.Number() }, closed);
+const VsmPurposeSchema = Type.Object({
+  unitId: IdSchema, description: text(512), converged: Type.Boolean(), revision: count,
+  exits: Type.Array(VsmExitSchema, { maxItems: 8 }),
+}, closed);
+const VsmChannelSchema = Type.Object({
+  id: IdSchema, kind: channelKind, unitId: IdSchema, procedureId: Type.Optional(IdSchema),
+  value: Type.Number(), observations: count, filtered: count, phase: channelPhase, wakeClass,
+}, closed);
+const VsmEffectSchema = Type.Object({
+  id: IdSchema, unitId: IdSchema, procedureId: IdSchema, status: effectStatus, sequence: count, attempts: count,
+  nativeId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+  outcomeValue: Type.Optional(Type.Number()), environmentRef: Type.Optional(text(160)),
+  at: timestamp,
+}, closed);
+const VsmAlarmSchema = Type.Object({
+  id: IdSchema, unitId: IdSchema, alarmClass: text(80), severity: Type.Number({ minimum: 0 }),
+  state: oneOf('recorded', 'raised', 'acknowledged'), raisedAt: Type.Optional(timestamp),
+}, closed);
+const VsmGrantSchema = Type.Object({
+  id: IdSchema, unitId: IdSchema, version: count, capacity: Type.Number({ minimum: 0 }),
+  validUntil: timestamp, revokedAt: Type.Optional(timestamp),
+}, closed);
+export const VsmSnapshotSchema = Type.Object({
+  runtime: oneOf('disabled', 'running'),
+  revision: timestamp, updatedAt: timestamp, principalId: Type.Optional(IdSchema),
+  purposes: Type.Array(VsmPurposeSchema, { maxItems: 64 }),
+  channels: Type.Array(VsmChannelSchema, { maxItems: 128 }),
+  effects: Type.Array(VsmEffectSchema, { maxItems: 128 }),
+  alarms: Type.Array(VsmAlarmSchema, { maxItems: 64 }),
+  grants: Type.Array(VsmGrantSchema, { maxItems: 64 }),
+}, closed);
+
 /** Public operations shared by the native UI, typed session actions and optional agent tools. */
 export const contract = defineFeatureContract({
   pluginId: 'viable-system-claw',
   operations: {
+    'vsm.snapshot': { kind: 'query', description: 'Bounded projection of the durable VSM runtime: purposes, homeostat channels, effects, alarms and grants. Read-only; does not launch, authorize or acknowledge.', input: EmptySchema, output: VsmSnapshotSchema,
+      tool: { name: 'vsc_vsm_snapshot', optional: true } },
     'graph.snapshot': { kind: 'query', description: 'Configured organization and recent metadata activity only. No automatic session-to-unit discovery. Partial coverage includes accepted handoffs but excludes message contents, historical replay and unbound sessions.', input: EmptySchema, output: GraphSnapshotSchema,
       tool: { name: 'vsc_graph_snapshot', optional: true } },
     'compute.snapshot': { kind: 'query', description: 'Last explicit allocator observations. Empty until a compute observer publishes data; no inferred quotas or capacity.', input: EmptySchema, output: ComputeSnapshotSchema,
@@ -76,5 +115,6 @@ export const contract = defineFeatureContract({
     changed: Type.Object({ revision: timestamp, area: oneOf('graph', 'compute', 'all') }, closed),
     alarm: Type.Object({ alarmId: IdSchema, unitId: IdSchema, alarmClass: text(80),
       severity: Type.Number({ minimum: 0, maximum: 1_000_000_000 }), at: timestamp }, closed),
+    vsm: Type.Object({ revision: timestamp, updatedAt: timestamp }, closed),
   },
 });

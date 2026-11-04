@@ -6,6 +6,8 @@ import { Backend } from './backend/backend.js';
 import { planAllocation } from './compute/index.js';
 import { fromNativeEvent, fromSessionSend, metadataId, type Observation } from './backend/events.js';
 import { buildRuntime, ensureRootState, nativeExecutorFor, readRuntimeConfig } from './runtime.js';
+import { emptyVsmSnapshot, projectVsmSnapshot } from './backend/vsm-snapshot.js';
+import { readDocument, VSM_DOCUMENT_KEY } from './vsm/state.js';
 
 const agentAccess = (context: FeatureInvocationContext) => context.source === 'session-action' && context.action.client?.allowsAgent
   ? (agentId: string) => context.action.client!.allowsAgent!(agentId) : undefined;
@@ -40,9 +42,11 @@ const plugin = defineFeaturePlugin({
     };
     // The durable runtime is opt-in per plugin config; absent config adds no timers or stores.
     const runtimeConfig = readRuntimeConfig(api.pluginConfig);
-    if (runtimeConfig) {
+    const vsmStore = runtimeConfig
+      ? api.runtime.state.openKeyedStoreV2({ namespace: 'vsm', retention: 'retained' })
+      : undefined;
+    if (runtimeConfig && vsmStore) {
       const clock = () => Date.now();
-      const vsmStore = api.runtime.state.openKeyedStoreV2({ namespace: 'vsm', retention: 'retained' });
       const privateStore = runtimeConfig.agentId
         ? api.runtime.state.openKeyedStoreV2({ namespace: 'vsm-private', retention: 'retained' })
         : undefined;
@@ -110,6 +114,12 @@ const plugin = defineFeaturePlugin({
       } catch { /* Observation only; never fail another workload. */ }
     });
     return {
+      'vsm.snapshot': async () => {
+        if (!vsmStore) return emptyVsmSnapshot();
+        const observed = await vsmStore.observe(VSM_DOCUMENT_KEY);
+        const document = readDocument(observed.value);
+        return document ? projectVsmSnapshot(document.state) : { ...emptyVsmSnapshot(), runtime: 'running' as const };
+      },
       'graph.snapshot': (_input, context) => backend.graphSnapshot(agentAccess(context)),
       'compute.snapshot': (_input, context) => backend.computeSnapshot(agentAccess(context)),
       'compute.plan': async (input, context) => {
