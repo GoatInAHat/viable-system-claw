@@ -193,3 +193,17 @@ Review 3 confirmed that a private sink failure froze an unavailable payload with
 **Evidence.** 264 tests across 17 files pass, including four retention tests (index bound/dedupe, mark/clear isolation, retry-then-retain, exhaustion). tsc --noEmit and plugin validation pass. Astra confirmed the one-shot case at a215608 (2 attempts, 1 retained payload, succeeded with environment return) and the persistent case there still lost the payload; the durable obligation is now awaiting its re-verification.
 
 **Bound.** Retry depends on the host session history still being readable. If the transcript is gone, attempts exhaust and the record remains for an operator rather than claiming a stored payload.
+
+## Part 10: retention bookkeeping verified
+
+Review 3 found four bookkeeping defects in the first retention obligation (12aa0cd). Commits 20a6ada and d329306 closed them, and the reviewer re-verified each against the production sink:
+
+- 33 and 40 simultaneous pending records: all indexed, all retained, all cleared. No truncation on cleanup.
+- Concurrent markPending with an index CAS conflict: converges in three attempts; both obligations indexed, retained and cleared. A record CAS conflict now rejects instead of creating a silent orphan.
+- 257 and 261 pending records: no eviction. Pass one retains 256, pass two retains the remainder; every payload verified and both indexes empty afterwards.
+- Corrupt primary index: recovered from the redundant copy on the first pass of a fresh retained-store instance; payload retained, record cleared, primary repaired.
+- Payload and pending-record writes both down, then recovery in the same process: closed within the documented process lifetime (memory fallback), with no relaunch and the terminal effect unchanged.
+
+**Evidence.** 268 tests across 17 files pass (eight retention tests, including paging and backup repair); tsc --noEmit and plugin validation pass. Reviewer artifacts: /tmp/vsc-review3-retention-*.ts/.out; addenda in .agents/local/astra-review-3.md.
+
+**Bounds.** The index is capped at 4096 ids (a new obligation is refused above it rather than evicting an old one); the memory fallback does not survive a process restart; simultaneous damage to both index copies is not recovered; retries depend on the host transcript still being readable. The 4096 ceiling, attempt cap under sustained failure and simultaneous dual-copy damage were not requalified by the reviewer.
