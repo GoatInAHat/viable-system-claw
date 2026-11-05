@@ -62,6 +62,8 @@ export interface VsmRuntimeOptions {
   executor: NativeExecutor;
   /** Optional shared fence; buildRuntime binds the synchronous authority check. */
   fence?: AuthorityFence;
+  /** Host-boundary assertion supplied by nativeExecutorFor; re-reads the committed state. */
+  assertCurrent?: () => void;
   privateStore?: DocumentStore;
   clock?: () => number;
   sampler?: (now: number) => Promise<CanarySample>;
@@ -171,26 +173,34 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
       }
       // Failure is terminal too; the environment brake still needs a readback.
       if (!['succeeded', 'failed'].includes(effect.status) || effect.environmentReturn) continue;
-      const sample = await sampler(clock());
-      await service.apply({
-        id: `environment/${effect.id}/${sample.at}`,
-        type: 'environment.returned',
-        effectId: effect.id,
-        evidenceRef: `canary:${sample.at}:readback:${effect.id}`,
-      });
+      try {
+        const sample = await sampler(clock());
+        await service.apply({
+          id: `environment/${effect.id}/${sample.at}`,
+          type: 'environment.returned',
+          effectId: effect.id,
+          evidenceRef: `canary:${sample.at}:readback:${effect.id}`,
+        });
+      } catch (error) {
+        // A failed readback must not abort the pass; the missing return stays visible to
+        // the deadline audit below.
+        options.log?.(`environment-readback-failed ${(error instanceof Error ? error.name : 'unknown').slice(0, 40)}`);
+      }
     }
     // Return deadlines become durable audit findings even when the effect never
     // reports. One inspect per effect and deadline; the event id is stable, so a
     // restart cannot duplicate the finding. Findings are notification signals, never
     // permission to spend inference.
     for (const effect of Object.values(service.state.effects)) {
-      if (!['reserved', 'accepted', 'ambiguous'].includes(effect.status)) continue;
+      if (['intent', 'lost', 'cancelled'].includes(effect.status)) continue;
       if (effect.environmentReturn || clock() < effect.returnDueAt) continue;
       const key = `audit/${effect.id}/${effect.returnDueAt}`;
       if (inspected.has(key)) continue;
-      inspected.add(key);
       try {
+        // Mark only after the finding is durable: a transient storage fault must be
+        // retried on the next pass, not suppressed until a restart.
         await service.apply({ id: key, type: 'audit.inspect', effectId: effect.id });
+        inspected.add(key);
       } catch (error) {
         options.log?.(`audit-inspect-failed ${(error instanceof Error ? error.name : 'unknown').slice(0, 40)}`);
       }
@@ -328,6 +338,18 @@ function seedChannels(state: VsmState, config: VsmRuntimeConfig): VsmState {
     : configureChannel(state, CANARY_CHANNEL, { threshold: 2.5 });
 }
 
+/**
+ * Outcome rule for a textual purpose: native success plus a non-blank visible reply.
+ * This is a completion rule, not proof that the diagnosis is correct; correctness needs
+ * an independent comparison against the sampled condition.
+ */
+export function evaluateDeliverable(outcome: { status: string; terminalReply?: { disposition: string; textCharacters?: number; textNonWhitespace?: number } }): { value: number; success: boolean } {
+  const reply = outcome.terminalReply;
+  const delivered = reply?.disposition === 'visible' && (reply.textCharacters ?? 0) > 0 && (reply.textNonWhitespace ?? 0) > 0;
+  const ok = outcome.status === 'ok' && delivered;
+  return { value: ok ? 1 : 0, success: ok };
+}
+
 export function nativeExecutorFor(
   api: OpenClawPluginApi, clock: () => number, options: {
     store?: DocumentStore;
@@ -346,6 +368,9 @@ export function nativeExecutorFor(
       now: clock,
       ...(options.privateResultSink ? { privateResultSink: options.privateResultSink } : {}),
       ...(options.fence ? { fence: options.fence } : {}),
+      // The host calls this at its own admission boundary; it reads the fence bound by
+      // buildRuntime, so a launch that the runtime already refused cannot proceed.
+      assertCurrent: intent => options.fence?.check?.(intent),
     }),
     resolveIntent: async request => {
       if (!options.privateStore) return undefined;
@@ -368,14 +393,9 @@ export function nativeExecutorFor(
       const now = clock();
       return now >= grant.validFrom && now < grant.validUntil;
     },
-    // A visible, non-empty terminal reply is the minimum evidence that the authorized
+    // A visible reply with actual content is the minimum evidence that the authorized
     // deliverable exists; process success alone is not an outcome.
-    evaluate: outcome => {
-      const delivered = outcome.terminalReply?.disposition === 'visible'
-        && (outcome.terminalReply.textCharacters ?? 0) > 0;
-      const ok = outcome.status === 'ok' && delivered;
-      return { value: ok ? 1 : 0, success: ok };
-    },
+    evaluate: evaluateDeliverable,
     probeLaunch: async request => {
       // Durable knowledge beats a fresh guess: a reservation already proven absent stays
       // absent instead of being degraded back to ambiguity by the periodic pass.
@@ -390,7 +410,10 @@ export function nativeExecutorFor(
       try {
         const history = await api.runtime.subagent.getSessionMessages({ sessionKey: marker.sessionKey, limit: 1 });
         if (!Array.isArray(history.messages)) return 'unknown';
-        return history.messages.length === 0 ? 'absent' : 'present';
+        // A committed marker means a launch was attempted, so an empty transcript is not
+        // proof that nothing was sent: transcripts persist late and can be reset. Absence
+        // must come from durable knowledge or an authoritative rejection, never from this.
+        return 'unknown';
       } catch {
         return 'unknown';
       }

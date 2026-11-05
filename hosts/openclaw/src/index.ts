@@ -60,12 +60,18 @@ const plugin = defineFeaturePlugin({
             write: async result => {
               const observed = await privateStore!.observe(result.ref);
               if (observed.value !== undefined) return;
-              await privateStore!.compareAndApply(result.ref, observed.comparison,
+              const written = await privateStore!.compareAndApply(result.ref, observed.comparison,
                 { operation: 'update', action: 'set', value: {
                   effectId: result.effectId, runId: result.runId, sessionKey: result.sessionKey,
                   messages: result.messages, terminalReply: result.terminalReply ?? null,
                   truncated: result.truncated, storedAt: Date.now(),
                 } });
+              // A conflict is not proof that the expected payload is present.
+              if (written.status !== 'applied') {
+                const check = await privateStore!.observe(result.ref);
+                const stored = check.value as { effectId?: unknown } | undefined;
+                if (stored?.effectId !== result.effectId) throw new Error('VSC_RESULT_CONFLICT');
+              }
             },
           },
           log: detail => api.logger.warn(`VSC native dispatch ${detail}`),
@@ -97,9 +103,17 @@ const plugin = defineFeaturePlugin({
             api.logger.warn(`VSC audit ${finding.id} ${finding.kind} residual=${finding.residual}`);
           };
         })(),
-        onImprovement: (action, state) => {
-          api.logger.warn(`VSC improvement candidate ${action.alarmClass} count=${state.alarmClasses[action.alarmClass]?.count ?? 0}`);
-        },
+        onImprovement: (() => {
+          // Restart passes re-emit improvement candidates; one notice per class and count.
+          const delivered = new Set<string>();
+          return (action, state) => {
+            const count = state.alarmClasses[action.alarmClass]?.count ?? 0;
+            const key = `${action.alarmClass}:${count}`;
+            if (delivered.has(key)) return;
+            delivered.add(key);
+            api.logger.warn(`VSC improvement candidate ${action.alarmClass} count=${count}`);
+          };
+        })(),
         log: detail => api.logger.warn(`VSC runtime ${detail}`),
       });
       api.registerService({

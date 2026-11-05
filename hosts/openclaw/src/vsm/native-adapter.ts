@@ -55,6 +55,12 @@ export function createNativeExecutor(options: NativeAdapterOptions): NativeExecu
         // The grant's own claim wins over any adapter-supplied value.
         capabilities: { tools: [...request.capabilities.tools], surfaces: [...request.capabilities.surfaces] },
       };
+      // Re-check authority after the intent read. A revocation committed while the
+      // private marker was being read must not be missed at the launch boundary.
+      if (options.assertAdmission && !await options.assertAdmission(request)) {
+        options.log?.(`admission-closed-after-intent ${request.effectId}`);
+        return { status: 'not-launched' };
+      }
       let receipt: EffectReceipt;
       try {
         receipt = await options.executor.dispatch(intent);

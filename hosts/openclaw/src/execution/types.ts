@@ -55,6 +55,8 @@ export type NativeStatus = 'ok' | 'error' | 'timeout' | 'pending';
 export interface ReplyMetadata {
   disposition: 'visible' | 'silent' | 'empty';
   textCharacters?: number;
+  /** Non-whitespace characters; a blank visible reply is not a deliverable. */
+  textNonWhitespace?: number;
   code?: 'message-tool-not-called';
 }
 export interface ResultReference {

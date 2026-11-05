@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildRuntime, CANARY_CHANNEL, DISPATCH_CHANNEL, PROBE_PROCEDURE, ensureRootState, nativeExecutorFor, readRuntimeConfig } from './runtime.js';
+import { buildRuntime, CANARY_CHANNEL, DISPATCH_CHANNEL, PROBE_PROCEDURE, ensureRootState, evaluateDeliverable, nativeExecutorFor, readRuntimeConfig } from './runtime.js';
 import { readDocument, type DocumentStore } from './vsm/state.js';
 import { intentKey } from './vsm/intent-store.js';
 import type { NativeExecutor } from './vsm/executor.js';
@@ -245,6 +245,50 @@ describe('canary runtime', () => {
     await runtime.reconcileOnce();
     expect(audits).toHaveLength(1);
     await runtime.stop();
+  });
+
+  it('retries a deadline inspection after a transient storage fault', async () => {
+    const store = new MemoryStore();
+    const privateStore = new MemoryStore();
+    const config = { ...base, agentId: 'canary' };
+    await ensureRootState(store, config, 10);
+    let failNextAudit = true;
+    const originalApply = store.compareAndApply.bind(store);
+    store.compareAndApply = async (key, comparison, mutation) => {
+      // The finding only exists in the document once audit.inspect commits.
+      if (failNextAudit && key === 'vsm-v1' && JSON.stringify(mutation.value).includes('missing-return')) {
+        failNextAudit = false;
+        throw new Error('storage-fault');
+      }
+      return originalApply(key, comparison, mutation);
+    };
+    let at = 100;
+    const stalled: NativeExecutor = {
+      async dispatch() { return { status: 'accepted', nativeId: 'run-stall-2', sessionKey: 'agent:canary:subagent:x' }; },
+      async reconcile() { return { status: 'unknown' }; },
+    };
+    const runtime = buildRuntime({ config, store, privateStore, executor: stalled, clock: () => at, sampler: faulty });
+    await runtime.start();
+    await runtime.sampleOnce();
+    const effectId = Object.keys(runtime.service.state.effects)[0];
+    at = runtime.service.state.effects[effectId].returnDueAt + 1;
+    await runtime.reconcileOnce();
+    expect(runtime.service.state.auditFindings).toEqual({});
+    at += 30_000;
+    await runtime.reconcileOnce();
+    expect(runtime.service.state.auditFindings[`${effectId}/audit/missing-return`]?.kind).toBe('missing-return');
+    await runtime.stop();
+  });
+
+  it('scores a blank visible reply as a failed deliverable', () => {
+    const base = { status: 'ok' };
+    expect(evaluateDeliverable({ ...base, terminalReply: { disposition: 'visible', textCharacters: 3, textNonWhitespace: 0 } }))
+      .toEqual({ value: 0, success: false });
+    expect(evaluateDeliverable({ ...base, terminalReply: { disposition: 'visible', textCharacters: 12, textNonWhitespace: 9 } }))
+      .toEqual({ value: 1, success: true });
+    expect(evaluateDeliverable({ ...base, terminalReply: { disposition: 'silent' } })).toEqual({ value: 0, success: false });
+    expect(evaluateDeliverable({ status: 'error', terminalReply: { disposition: 'visible', textCharacters: 5, textNonWhitespace: 5 } }))
+      .toEqual({ value: 0, success: false });
   });
 
   it('keeps a proven absent launch absent across the periodic reconciliation pass', async () => {

@@ -34,6 +34,16 @@ describe('native adapter', () => {
     expect(calls.dispatch).toBe(0);
   });
 
+  it('re-checks authority after the intent read so a revocation committed meanwhile wins', async () => {
+    const { calls, executor } = fakeExecutor(accepted);
+    let checks = 0;
+    const native = createNativeExecutor({ executor, resolveIntent: () => intent,
+      assertAdmission: async () => { checks++; return checks === 1; } });
+    expect(await native.dispatch(request)).toEqual({ status: 'not-launched' });
+    expect(checks).toBe(2);
+    expect(calls.dispatch).toBe(0);
+  });
+
   it('reports acceptance with the durable native identity', async () => {
     const { executor } = fakeExecutor(accepted);
     const native = createNativeExecutor({ executor, resolveIntent: () => intent });

@@ -15,7 +15,8 @@ function token(value: string | undefined, allowed: ReadonlySet<string>): string 
 }
 function replyMetadata(reply: NativeReply | undefined): ReplyMetadata | undefined {
   if (!reply) return undefined;
-  if (reply.disposition === 'visible') return { disposition: 'visible', textCharacters: reply.text.length };
+  if (reply.disposition === 'visible') return { disposition: 'visible', textCharacters: reply.text.length,
+    textNonWhitespace: reply.text.replace(/\s/g, '').length };
   if (reply.disposition === 'empty') return { disposition: 'empty',
     ...(reply.code === 'message-tool-not-called' ? { code: reply.code } : {}) };
   return { disposition: 'silent' };
@@ -109,6 +110,7 @@ export class EffectReconciler {
         ...(previous.reason ? { reason: previous.reason } : {}),
         ...(previous.terminalReply ? { terminalReply: { disposition: previous.terminalReply.disposition,
           ...(previous.terminalReply.textCharacters === undefined ? {} : { textCharacters: previous.terminalReply.textCharacters }),
+          ...(previous.terminalReply.textNonWhitespace === undefined ? {} : { textNonWhitespace: previous.terminalReply.textNonWhitespace }),
           ...(previous.terminalReply.code === undefined ? {} : { code: previous.terminalReply.code }) } } : {}),
         ...(previous.resultRef ? { resultRef: { kind: 'native-session', runId: previous.resultRef.runId,
           sessionKey: previous.resultRef.sessionKey, messagesObserved: previous.resultRef.messagesObserved,
