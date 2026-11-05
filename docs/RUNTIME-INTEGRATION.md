@@ -1,6 +1,6 @@
 # Runtime integration boundary
 
-Status: **kernel, durable state, service, native adapter and opt-in Gateway registration implemented.** Synthetic tests and a disposable-Gateway restart are recorded in `docs/QUALIFICATION.md`. The canary purpose is read-only. Production cutover, alarm delivery, a runtime UI and any natively dispatched purpose remain open.
+Status: **kernel, durable state, service, native adapter and opt-in Gateway registration implemented; actuator authority fence, capability mediation, retained result payloads, deadline audits and alarm/audit dedupe implemented.** Synthetic tests and a disposable-Gateway restart are recorded in `docs/QUALIFICATION.md`. The canary purpose is read-only. Production cutover, alarm delivery, a runtime UI and any natively dispatched purpose remain open.
 
 ## Durable state
 

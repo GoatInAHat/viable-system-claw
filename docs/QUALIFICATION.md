@@ -128,3 +128,15 @@ Commit 64aa6dd closes the remaining production half of review finding 6. The per
 **Evidence.** 256 tests pass (one new runtime test drives a stalled accepted run past its return deadline, asserts exactly one missing-return finding, asserts the sink delivered it once, and asserts a second pass does not re-deliver); tsc --noEmit passes; plugin validation passes. Fresh disposable Gateway /tmp/vsc-qual-11: effect 1 completed succeeded with outcome 1 and a correlated environment return, channel re-armed to evidence, no audit findings (correct negative case: the run returned before its deadline), no alarm, no authority or capability rejection in the log.
 
 **Not claimed.** Audit findings do not yet reach the principal through a durable acknowledged channel; the sink is an operator log signal. Acknowledgment and escalation remain open.
+
+## Part 6: known absence survives reconciliation
+
+Commit e588058 closes the remaining half of review finding 3 that lives inside the plugin.
+
+The periodic pass reconciles every uncertain effect through the adapter. The adapter could not reconstruct a receipt for an effect whose launch had already been proven absent, so its probe returned unknown and the reducer degraded a proven `lost` effect back to `ambiguous` - a known fact replaced by a guess on every pass.
+
+The adapter probe now reads the durable document first: an effect already recorded `lost` is answered `absent` from durable knowledge, not probed again. Only effects with no durable verdict fall through to the intent marker and session-history probe.
+
+**Evidence.** 257 tests pass, including a new runtime test that creates a proven-absent effect and then calls the production `nativeExecutorFor` adapter reconcile, asserting the reply is `not-launched` rather than `unknown`. tsc --noEmit and plugin validation pass.
+
+**Still open.** A reservation whose launch outcome is genuinely unknown (crash between native admission and receipt commit) cannot be resolved inside the plugin: OpenClaw plugin-subagent idempotency is an in-memory gateway dedupe, not a durable ledger, so replay cannot be proven safe. It stays `ambiguous` with a durable escalation alarm. See docs/HOST-DEPENDENCIES.md.
