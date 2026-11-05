@@ -66,6 +66,10 @@ export interface VsmRuntimeOptions {
   clock?: () => number;
   sampler?: (now: number) => Promise<CanarySample>;
   onAlarm?: (action: Extract<VsmAction, { type: 'alarm' }>, state: VsmState) => void;
+  /** Durable audit notification; bounded metadata only, never private bodies. */
+  onAudit?: (action: Extract<VsmAction, { type: 'audit' }>, state: VsmState) => void;
+  /** Improvement candidate signal; carries the class, never an authorization. */
+  onImprovement?: (action: Extract<VsmAction, { type: 'improve-alarm-class' }>, state: VsmState) => void;
   /** Operator-surface notification; carries revision only, never private data. */
   onChange?: (revision: number, updatedAt: number) => void;
   log?: (detail: string) => void;
@@ -95,6 +99,8 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
     executor: options.executor,
     clock,
     alarmSink: options.onAlarm,
+    auditSink: options.onAudit,
+    improvementSink: options.onImprovement,
     log: { warn: () => undefined },
     ...(options.privateStore && options.config.agentId ? {
       markIntent: async (request, state) => {
@@ -134,6 +140,7 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
   };
   let timer: ReturnType<typeof setInterval> | null = null;
   let consecutiveFaults = 0;
+  const inspected = new Set<string>();
 
   async function reconcileOnce(): Promise<void> {
     try {
@@ -171,6 +178,22 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
         effectId: effect.id,
         evidenceRef: `canary:${sample.at}:readback:${effect.id}`,
       });
+    }
+    // Return deadlines become durable audit findings even when the effect never
+    // reports. One inspect per effect and deadline; the event id is stable, so a
+    // restart cannot duplicate the finding. Findings are notification signals, never
+    // permission to spend inference.
+    for (const effect of Object.values(service.state.effects)) {
+      if (!['reserved', 'accepted', 'ambiguous'].includes(effect.status)) continue;
+      if (effect.environmentReturn || clock() < effect.returnDueAt) continue;
+      const key = `audit/${effect.id}/${effect.returnDueAt}`;
+      if (inspected.has(key)) continue;
+      inspected.add(key);
+      try {
+        await service.apply({ id: key, type: 'audit.inspect', effectId: effect.id });
+      } catch (error) {
+        options.log?.(`audit-inspect-failed ${(error instanceof Error ? error.name : 'unknown').slice(0, 40)}`);
+      }
     }
     options.onChange?.(service.state.revision, service.state.updatedAt);
   }

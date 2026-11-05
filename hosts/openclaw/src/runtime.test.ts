@@ -220,6 +220,33 @@ describe('canary runtime', () => {
     await runtime.stop();
   });
 
+  it('raises one durable missing-return finding at the deadline instead of waiting forever', async () => {
+    const store = new MemoryStore();
+    const privateStore = new MemoryStore();
+    const config = { ...base, agentId: 'canary' };
+    await ensureRootState(store, config, 10);
+    let at = 100;
+    const stalled: NativeExecutor = {
+      async dispatch() { return { status: 'accepted', nativeId: 'run-stall-1', sessionKey: 'agent:canary:subagent:x' }; },
+      async reconcile() { return { status: 'unknown' }; },
+    };
+    const audits: string[] = [];
+    const runtime = buildRuntime({ config, store, privateStore, executor: stalled, clock: () => at,
+      sampler: faulty, onAudit: action => { audits.push(action.findingId); } });
+    await runtime.start();
+    await runtime.sampleOnce();
+    const effectId = Object.keys(runtime.service.state.effects)[0];
+    const due = runtime.service.state.effects[effectId].returnDueAt;
+    expect(runtime.service.state.auditFindings).toEqual({});
+    at = due + 1;
+    await runtime.reconcileOnce();
+    expect(runtime.service.state.auditFindings[`${effectId}/audit/missing-return`]?.kind).toBe('missing-return');
+    expect(audits).toEqual([`${effectId}/audit/missing-return`]);
+    await runtime.reconcileOnce();
+    expect(audits).toHaveLength(1);
+    await runtime.stop();
+  });
+
   it('commits a private intent and dispatches the probe when a fault crosses the threshold', async () => {
     const store = new MemoryStore();
     const privateStore = new MemoryStore();

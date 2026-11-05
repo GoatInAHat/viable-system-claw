@@ -87,6 +87,19 @@ const plugin = defineFeaturePlugin({
             });
           };
         })(),
+        onAudit: (() => {
+          // Findings are durable signals; deliver each one once per process.
+          const delivered = new Set<string>();
+          return (action, state) => {
+            const finding = state.auditFindings[action.findingId];
+            if (!finding || delivered.has(finding.id)) return;
+            delivered.add(finding.id);
+            api.logger.warn(`VSC audit ${finding.id} ${finding.kind} residual=${finding.residual}`);
+          };
+        })(),
+        onImprovement: (action, state) => {
+          api.logger.warn(`VSC improvement candidate ${action.alarmClass} count=${state.alarmClasses[action.alarmClass]?.count ?? 0}`);
+        },
         log: detail => api.logger.warn(`VSC runtime ${detail}`),
       });
       api.registerService({
