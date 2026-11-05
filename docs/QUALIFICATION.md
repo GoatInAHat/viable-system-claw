@@ -140,3 +140,29 @@ The adapter probe now reads the durable document first: an effect already record
 **Evidence.** 257 tests pass, including a new runtime test that creates a proven-absent effect and then calls the production `nativeExecutorFor` adapter reconcile, asserting the reply is `not-launched` rather than `unknown`. tsc --noEmit and plugin validation pass.
 
 **Still open.** A reservation whose launch outcome is genuinely unknown (crash between native admission and receipt commit) cannot be resolved inside the plugin: OpenClaw plugin-subagent idempotency is an in-memory gateway dedupe, not a durable ledger, so replay cannot be proven safe. It stays `ambiguous` with a durable escalation alarm. See docs/HOST-DEPENDENCIES.md.
+
+## Correction (from independent review 3)
+
+Review 3 (.agents/local/astra-review-3.md) found two defects in the claims of Parts 4 to 6, both now fixed at b7840ed:
+
+- The host admission callback was not actually forwarded: production constructed the executor without assertCurrent, so the host never received it. The adapter also checked authority only before the private-intent read, so a revocation committed during that read was missed. Production now forwards assertCurrent, and the adapter re-checks admission after resolveIntent. A test drives the re-check.
+- The launch probe treated an empty transcript as proof of absence, so an uncertain first launch could be treated as no launch. A committed marker now yields unknown; absence comes only from durable knowledge or an authoritative rejection.
+
+Parts 4 to 6 should be read with this correction; the earlier text described intent rather than observed behavior for the host callback.
+
+## Part 7: review-3 defect fixes
+
+Commit b7840ed closes the three defects review 3 reproduced, plus three smaller defects it found by inspection:
+
+1. Admission fence: assertCurrent is forwarded to the host run call; the native adapter re-checks assertAdmission immediately after the private-intent read. Test: a revocation committed during that read yields not-launched with zero executor calls.
+2. Uncertain launch: an empty session transcript no longer proves absence. Test: a committed marker with empty history yields unknown and cannot permit a second launch.
+3. Transient audit fault: the inspected key is recorded only after audit.inspect commits; a storage fault is retried on the next pass. Test: one injected CAS fault, then a healthy pass commits missing-return.
+4. Blank replies: ReplyMetadata carries textNonWhitespace, and evaluateDeliverable requires non-blank visible content. Whitespace-only success is now a failed deliverable.
+5. Result retention: the private sink inspects the CAS status and reads back before claiming stored; a conflict without the expected payload throws instead of silently claiming success.
+6. Improvement signals: the sink deduplicates by alarm class and count, matching the alarm and audit sinks.
+
+Commit db897b6 makes snapshot coverage explicit: every section carries total/returned/truncated and the snapshot carries partial, so a bounded projection cannot silently hide obligations.
+
+**Evidence.** 260 tests pass; tsc --noEmit and plugin validation pass. Review 3 re-verification is in progress in the retained reviewer session.
+
+**Still open from review 3.** Result retention is best-effort: a sink failure freezes an unavailable payload with the terminal outcome and restart does not rediscover it. History is still one monolithic document with a finite retained-effect bound and no replay watermark. Authenticated runtime mutations, acknowledged principal delivery, compute stewardship, recursive adoption and measured diagnostic correctness are unchanged. See docs/HOST-DEPENDENCIES.md.
