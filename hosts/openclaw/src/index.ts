@@ -7,6 +7,7 @@ import { planAllocation } from './compute/index.js';
 import { fromNativeEvent, fromSessionSend, metadataId, type Observation } from './backend/events.js';
 import { buildRuntime, ensureRootState, nativeExecutorFor, readRuntimeConfig } from './runtime.js';
 import type { AuthorityFence } from './execution/types.js';
+import { clearPending, markPending, resultPayloadRef, retentionRecordKey, retryPendingResults } from './retention.js';
 import { emptyVsmSnapshot, projectVsmSnapshot } from './backend/vsm-snapshot.js';
 import { readDocument, VSM_DOCUMENT_KEY } from './vsm/state.js';
 
@@ -52,34 +53,63 @@ const plugin = defineFeaturePlugin({
         ? api.runtime.state.openKeyedStoreV2({ namespace: 'vsm-private', retention: 'retained' })
         : undefined;
       const fence: AuthorityFence = {};
+      const storeResultPayload = async (result: { ref: string; effectId: string; runId: string;
+        sessionKey: string; messages: unknown[]; terminalReply?: unknown; truncated: boolean }) => {
+        const observed = await privateStore!.observe(result.ref);
+        if (observed.value !== undefined) return;
+        const written = await privateStore!.compareAndApply(result.ref, observed.comparison,
+          { operation: 'update', action: 'set', value: {
+            effectId: result.effectId, runId: result.runId, sessionKey: result.sessionKey,
+            messages: result.messages, terminalReply: result.terminalReply ?? null,
+            truncated: result.truncated, storedAt: Date.now(),
+          } });
+        // A conflict is not proof that the expected payload is present.
+        if (written.status !== 'applied') {
+          const check = await privateStore!.observe(result.ref);
+          const stored = check.value as { effectId?: unknown } | undefined;
+          if (stored?.effectId !== result.effectId) throw new Error('VSC_RESULT_CONFLICT');
+        }
+      };
       const runtime = buildRuntime({
         config: runtimeConfig, store: vsmStore, privateStore, clock, fence,
+        // Durable obligation: a payload that could not be stored at terminal time is
+        // retried on later passes, independently of the frozen execution outcome.
+        retainPending: privateStore ? async () => {
+          await retryPendingResults({
+            store: privateStore,
+            fetchMessages: async (sessionKey, limit) => {
+              const history = await api.runtime.subagent.getSessionMessages({ sessionKey, limit });
+              return Array.isArray(history.messages) ? history.messages : [];
+            },
+            write: async payload => storeResultPayload({
+              ref: resultPayloadRef(payload.effectId, payload.runId),
+              effectId: payload.effectId, runId: payload.runId, sessionKey: payload.sessionKey,
+              messages: payload.messages, truncated: false,
+            }),
+            now: clock,
+            log: detail => api.logger.warn(`VSC retention ${detail}`),
+          });
+        } : undefined,
         executor: nativeExecutorFor(api, clock, {
           store: vsmStore, privateStore, agentId: runtimeConfig.agentId, fence,
           privateResultSink: {
             write: async (result: { ref: string; effectId: string; runId: string; sessionKey: string;
               messages: unknown[]; terminalReply?: unknown; truncated: boolean }) => {
-              // One bounded retry for a transient storage fault. The payload is keyed by
-              // effect identity, so replaying the write cannot duplicate a result.
-              const storeResult = async () => {
-                const observed = await privateStore!.observe(result.ref);
-                if (observed.value !== undefined) return;
-                const written = await privateStore!.compareAndApply(result.ref, observed.comparison,
-                  { operation: 'update', action: 'set', value: {
-                    effectId: result.effectId, runId: result.runId, sessionKey: result.sessionKey,
-                    messages: result.messages, terminalReply: result.terminalReply ?? null,
-                    truncated: result.truncated, storedAt: Date.now(),
-                  } });
-                // A conflict is not proof that the expected payload is present.
-                if (written.status !== 'applied') {
-                  const check = await privateStore!.observe(result.ref);
-                  const stored = check.value as { effectId?: unknown } | undefined;
-                  if (stored?.effectId !== result.effectId) throw new Error('VSC_RESULT_CONFLICT');
-                }
-              };
+              // One bounded retry for a transient fault, then a durable pending record so a
+              // persistent fault is recovered on a later pass instead of lost forever.
               for (let attempt = 0; ; attempt++) {
-                try { await storeResult(); return; }
-                catch (error) { if (attempt >= 1) throw error; }
+                try {
+                  await storeResultPayload(result);
+                  const existing = await privateStore!.observe(retentionRecordKey(result.effectId));
+                  if (existing.value !== undefined && existing.value !== null) await clearPending(privateStore!, result.effectId);
+                  return;
+                } catch (error) {
+                  if (attempt >= 1) {
+                    await markPending(privateStore!, { effectId: result.effectId, runId: result.runId,
+                      sessionKey: result.sessionKey, attempts: 0, lastAt: clock() }).catch(() => undefined);
+                    throw error;
+                  }
+                }
               }
             },
           },

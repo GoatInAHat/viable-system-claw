@@ -70,6 +70,8 @@ export interface VsmRuntimeOptions {
   onAlarm?: (action: Extract<VsmAction, { type: 'alarm' }>, state: VsmState) => void;
   /** Durable audit notification; bounded metadata only, never private bodies. */
   onAudit?: (action: Extract<VsmAction, { type: 'audit' }>, state: VsmState) => void;
+  /** Retries private result payloads that a terminal execution failed to store. */
+  retainPending?: () => Promise<void>;
   /** Improvement candidate signal; carries the class, never an authorization. */
   onImprovement?: (action: Extract<VsmAction, { type: 'improve-alarm-class' }>, state: VsmState) => void;
   /** Operator-surface notification; carries revision only, never private data. */
@@ -204,6 +206,10 @@ export function buildRuntime(options: VsmRuntimeOptions): VsmRuntime {
       } catch (error) {
         options.log?.(`audit-inspect-failed ${(error instanceof Error ? error.name : 'unknown').slice(0, 40)}`);
       }
+    }
+    if (options.retainPending) {
+      try { await options.retainPending(); }
+      catch (error) { options.log?.(`retention-pass-failed ${(error instanceof Error ? error.name : 'unknown').slice(0, 40)}`); }
     }
     options.onChange?.(service.state.revision, service.state.updatedAt);
   }

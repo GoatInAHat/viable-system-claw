@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { resultPayloadRef } from '../retention.js';
 import { EXECUTION_LIMITS, type EffectOutcome, type EffectReceipt, type Json,
   type NativeReply, type NativeSubagentRuntime, type NativeWaitResult, type ReconcileOptions,
   type ReplyMetadata, type ResultReference } from './types.js';
@@ -167,7 +167,7 @@ export class EffectReconciler {
     const restoredWhileReading = this.terminals.get(key);
     if (restoredWhileReading) return restoredWhileReading;
     if (this.options.privateResultSink) {
-      const ref = `vsc-private-result:${createHash('sha256').update(`${receipt.effectId}\0${receipt.runId}`).digest('hex')}`;
+      const ref = resultPayloadRef(receipt.effectId, receipt.runId);
       const payload = privatePayload(messages, wait.terminalReply);
       payload.truncated ||= oversizedPage;
       // Do not claim to have stored a result when neither history nor a terminal reply was available.
