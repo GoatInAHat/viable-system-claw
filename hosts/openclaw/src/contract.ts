@@ -80,8 +80,13 @@ const VsmGrantSchema = Type.Object({
   id: IdSchema, unitId: IdSchema, version: count, capacity: Type.Number({ minimum: 0 }),
   validUntil: timestamp, revokedAt: Type.Optional(timestamp),
 }, closed);
+const VsmSectionCoverageSchema = Type.Object({ total: count, returned: count, truncated: Type.Boolean() }, closed);
 export const VsmSnapshotSchema = Type.Object({
   runtime: oneOf('disabled', 'running'),
+  /** Explicit coverage per section: a bounded projection must never hide obligations. */
+  coverage: Type.Object({ purposes: VsmSectionCoverageSchema, channels: VsmSectionCoverageSchema,
+    effects: VsmSectionCoverageSchema, alarms: VsmSectionCoverageSchema, grants: VsmSectionCoverageSchema }, closed),
+  partial: Type.Boolean(),
   revision: timestamp, updatedAt: timestamp, principalId: Type.Optional(IdSchema),
   purposes: Type.Array(VsmPurposeSchema, { maxItems: 64 }),
   channels: Type.Array(VsmChannelSchema, { maxItems: 128 }),

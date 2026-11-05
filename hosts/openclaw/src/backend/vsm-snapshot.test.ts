@@ -9,7 +9,12 @@ const base = () => addUnit(createState({ rootId: 'root', principalId: 'human', c
 describe('VSM runtime snapshot', () => {
   it('reports a disabled runtime without inventing state', () => {
     expect(emptyVsmSnapshot()).toEqual({
-      runtime: 'disabled', revision: 0, updatedAt: 0,
+      runtime: 'disabled', revision: 0, updatedAt: 0, partial: false,
+      coverage: {
+        purposes: { total: 0, returned: 0, truncated: false }, channels: { total: 0, returned: 0, truncated: false },
+        effects: { total: 0, returned: 0, truncated: false }, alarms: { total: 0, returned: 0, truncated: false },
+        grants: { total: 0, returned: 0, truncated: false },
+      },
       purposes: [], channels: [], effects: [], alarms: [], grants: [],
     });
   });

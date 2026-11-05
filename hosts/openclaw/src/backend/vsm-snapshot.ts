@@ -7,7 +7,12 @@ export type VsmSnapshot = Static<typeof VsmSnapshotSchema>;
 /** Stable empty projection; a disabled runtime is not an error. */
 export function emptyVsmSnapshot(): VsmSnapshot {
   return {
-    runtime: 'disabled', revision: 0, updatedAt: 0,
+    runtime: 'disabled', revision: 0, updatedAt: 0, partial: false,
+    coverage: {
+      purposes: { total: 0, returned: 0, truncated: false }, channels: { total: 0, returned: 0, truncated: false },
+      effects: { total: 0, returned: 0, truncated: false }, alarms: { total: 0, returned: 0, truncated: false },
+      grants: { total: 0, returned: 0, truncated: false },
+    },
     purposes: [], channels: [], effects: [], alarms: [], grants: [],
   };
 }
@@ -19,6 +24,13 @@ const LIMITS = { purposes: 64, channels: 128, effects: 128, alarms: 64, grants: 
  * intent text and never invents a status that the durable record does not hold.
  */
 export function projectVsmSnapshot(state: VsmState): VsmSnapshot {
+  const total = {
+    purposes: Object.keys(state.units).length, channels: Object.keys(state.channels).length,
+    effects: Object.keys(state.effects).length, alarms: Object.keys(state.alarms).length,
+    grants: Object.keys(state.grants).length,
+  };
+  const coverage = <K extends keyof typeof LIMITS>(key: K, returned: number) =>
+    ({ total: total[key], returned, truncated: returned < total[key] });
   const purposes = Object.values(state.units)
     .sort((a, b) => a.id.localeCompare(b.id))
     .slice(0, LIMITS.purposes)
@@ -66,8 +78,15 @@ export function projectVsmSnapshot(state: VsmState): VsmSnapshot {
       id: grant.id, unitId: grant.unitId, version: grant.version, capacity: grant.capacity,
       validUntil: grant.validUntil, ...(grant.revokedAt === null ? {} : { revokedAt: grant.revokedAt }),
     }));
+  const sections = {
+    purposes: coverage('purposes', purposes.length), channels: coverage('channels', channels.length),
+    effects: coverage('effects', effects.length), alarms: coverage('alarms', alarms.length),
+    grants: coverage('grants', grants.length),
+  };
   return {
     runtime: 'running', revision: state.revision, updatedAt: state.updatedAt,
     principalId: state.principalId, purposes, channels, effects, alarms, grants,
+    coverage: sections,
+    partial: Object.values(sections).some(section => section.truncated),
   };
 }

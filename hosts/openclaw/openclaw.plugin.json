@@ -12,7 +12,7 @@
     "onStartup": true
   },
   "controlUi": {
-    "entry": "dist/control-ui/174fbf00ad100b17552612884625da946976e9c367f85ab4301d1cd606e581e5/index.js"
+    "entry": "dist/control-ui/b3d2027a1a2c133251ebcd84e21fe0134552d849edf73bdd121bd1b1ca6f96e0/index.js"
   },
   "contracts": {
     "tools": [
