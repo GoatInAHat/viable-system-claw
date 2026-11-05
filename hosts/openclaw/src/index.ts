@@ -57,20 +57,29 @@ const plugin = defineFeaturePlugin({
         executor: nativeExecutorFor(api, clock, {
           store: vsmStore, privateStore, agentId: runtimeConfig.agentId, fence,
           privateResultSink: {
-            write: async result => {
-              const observed = await privateStore!.observe(result.ref);
-              if (observed.value !== undefined) return;
-              const written = await privateStore!.compareAndApply(result.ref, observed.comparison,
-                { operation: 'update', action: 'set', value: {
-                  effectId: result.effectId, runId: result.runId, sessionKey: result.sessionKey,
-                  messages: result.messages, terminalReply: result.terminalReply ?? null,
-                  truncated: result.truncated, storedAt: Date.now(),
-                } });
-              // A conflict is not proof that the expected payload is present.
-              if (written.status !== 'applied') {
-                const check = await privateStore!.observe(result.ref);
-                const stored = check.value as { effectId?: unknown } | undefined;
-                if (stored?.effectId !== result.effectId) throw new Error('VSC_RESULT_CONFLICT');
+            write: async (result: { ref: string; effectId: string; runId: string; sessionKey: string;
+              messages: unknown[]; terminalReply?: unknown; truncated: boolean }) => {
+              // One bounded retry for a transient storage fault. The payload is keyed by
+              // effect identity, so replaying the write cannot duplicate a result.
+              const storeResult = async () => {
+                const observed = await privateStore!.observe(result.ref);
+                if (observed.value !== undefined) return;
+                const written = await privateStore!.compareAndApply(result.ref, observed.comparison,
+                  { operation: 'update', action: 'set', value: {
+                    effectId: result.effectId, runId: result.runId, sessionKey: result.sessionKey,
+                    messages: result.messages, terminalReply: result.terminalReply ?? null,
+                    truncated: result.truncated, storedAt: Date.now(),
+                  } });
+                // A conflict is not proof that the expected payload is present.
+                if (written.status !== 'applied') {
+                  const check = await privateStore!.observe(result.ref);
+                  const stored = check.value as { effectId?: unknown } | undefined;
+                  if (stored?.effectId !== result.effectId) throw new Error('VSC_RESULT_CONFLICT');
+                }
+              };
+              for (let attempt = 0; ; attempt++) {
+                try { await storeResult(); return; }
+                catch (error) { if (attempt >= 1) throw error; }
               }
             },
           },
