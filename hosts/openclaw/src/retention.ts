@@ -8,7 +8,11 @@ import type { DocumentStore } from './vsm/state.js';
  * operator retires it.
  */
 export const RETENTION_INDEX = 'retention/pending';
-export const RETENTION_LIMIT = 32;
+/**
+ * Storage keeps every obligation it was given; scanning and writes are bounded together
+ * so a full index never silently drops a record that already exists.
+ */
+export const RETENTION_LIMIT = 256;
 export const RETENTION_MAX_ATTEMPTS = 64;
 export const retentionRecordKey = (effectId: string): string => `retention/record/${effectId}`;
 /** Canonical payload identity; must match the reconciler's private sink reference. */
@@ -51,17 +55,30 @@ export function parseRetentionRecord(value: unknown): PendingRetention | undefin
     attempts: record.attempts, lastAt: record.lastAt };
 }
 
-/** Best-effort index update; a failure leaves the previous index readable. */
+/**
+ * Index update over the RAW stored list, not a parsed projection, so cleanup can never
+ * truncate an existing entry. Retries an explicit CAS conflict only; the mutation is
+ * re-applied to the fresh list each time, so concurrent writers converge.
+ */
 async function updateIndex(store: DocumentStore, mutate: (ids: string[]) => string[]): Promise<void> {
-  const observed = await store.observe(RETENTION_INDEX);
-  const ids = mutate(parseRetentionIndex(observed.value));
-  await store.compareAndApply(RETENTION_INDEX, observed.comparison,
-    { operation: 'update', action: 'set', value: { ids } });
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const observed = await store.observe(RETENTION_INDEX);
+    const raw = observed.value as { ids?: unknown } | undefined;
+    const current = Array.isArray(raw?.ids) ? raw!.ids.filter((id): id is string => validId(id, 128)) : [];
+    const next = mutate(current).slice(-RETENTION_LIMIT);
+    const written = await store.compareAndApply(RETENTION_INDEX, observed.comparison,
+      { operation: 'update', action: 'set', value: { ids: next } });
+    if (written.status === 'applied' || written.status === 'unchanged') return;
+  }
+  throw new Error('VSC_RETENTION_INDEX_CONFLICT');
 }
 
 export async function markPending(store: DocumentStore, record: PendingRetention): Promise<void> {
-  await store.compareAndApply(retentionRecordKey(record.effectId), await store.observe(retentionRecordKey(record.effectId)).then(o => o.comparison),
+  const key = retentionRecordKey(record.effectId);
+  const observed = await store.observe(key);
+  const written = await store.compareAndApply(key, observed.comparison,
     { operation: 'update', action: 'set', value: record });
+  if (written.status !== 'applied' && written.status !== 'unchanged') throw new Error('VSC_RETENTION_RECORD_CONFLICT');
   await updateIndex(store, ids => [...ids.filter(id => id !== record.effectId), record.effectId]);
 }
 

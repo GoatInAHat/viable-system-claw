@@ -6,9 +6,10 @@ import type { DocumentStore } from './vsm/state.js';
 class MemoryStore implements DocumentStore {
   data = new Map<string, unknown>();
   async observe(key: string) { return { value: structuredClone(this.data.get(key)), comparison: { key } }; }
-  async compareAndApply(key: string, _comparison: unknown, mutation: { operation: 'update'; action: 'set'; value: unknown }) {
+  async compareAndApply(key: string, _comparison: unknown, mutation: { operation: 'update'; action: 'set'; value: unknown }):
+    Promise<{ status: 'applied' | 'conflict' | 'unchanged' }> {
     this.data.set(key, structuredClone(mutation.value));
-    return { status: 'applied' as const };
+    return { status: 'applied' };
   }
 }
 
@@ -21,13 +22,36 @@ describe('result retention obligation', () => {
   it('bounds and dedupes the pending index and rejects malformed records', () => {
     expect(parseRetentionIndex(undefined)).toEqual([]);
     expect(parseRetentionIndex({ ids: ['a', 'a', 'b', 7, 'bad\nid'] })).toEqual(['a', 'b']);
-    expect(parseRetentionIndex({ ids: Array.from({ length: 40 }, (_, i) => `id${i}`) })).toHaveLength(32);
+    expect(parseRetentionIndex({ ids: Array.from({ length: 300 }, (_, i) => `id${i}`) })).toHaveLength(256);
     expect(parseRetentionRecord(undefined)).toBeUndefined();
     expect(parseRetentionRecord({ effectId: 'x', runId: 'r', sessionKey: 's', attempts: RETENTION_MAX_ATTEMPTS + 1, lastAt: 1 })).toBeUndefined();
     expect(parseRetentionRecord({ effectId: 'x', runId: 'r', sessionKey: 's', attempts: RETENTION_MAX_ATTEMPTS, lastAt: 1 })?.attempts)
       .toBe(RETENTION_MAX_ATTEMPTS);
     expect(parseRetentionRecord({ effectId: 'x', runId: 'r', sessionKey: 's', attempts: 1, lastAt: 1 })).toEqual(
       { effectId: 'x', runId: 'r', sessionKey: 's', attempts: 1, lastAt: 1 });
+  });
+
+  it('never drops an existing obligation when the index is cleaned', async () => {
+    const store = new MemoryStore();
+    for (let index = 0; index < 40; index++) {
+      await markPending(store, record({ effectId: `canary/local/forward/effect/${index}`, runId: `run-${index}` }));
+    }
+    expect(parseRetentionIndex(store.data.get(RETENTION_INDEX))).toHaveLength(40);
+    for (let index = 0; index < 39; index++) await clearPending(store, `canary/local/forward/effect/${index}`);
+    expect(parseRetentionIndex(store.data.get(RETENTION_INDEX))).toEqual(['canary/local/forward/effect/39']);
+    expect(parseRetentionRecord(store.data.get(retentionRecordKey('canary/local/forward/effect/39')))?.attempts).toBe(0);
+  });
+
+  it('converges through an explicit index CAS conflict', async () => {
+    const store = new MemoryStore();
+    let conflicts = 1;
+    const apply = store.compareAndApply.bind(store);
+    store.compareAndApply = async (key, comparison, mutation) => {
+      if (key === RETENTION_INDEX && conflicts > 0) { conflicts--; return { status: 'conflict' as const }; }
+      return apply(key, comparison, mutation);
+    };
+    await markPending(store, record());
+    expect(parseRetentionIndex(store.data.get(RETENTION_INDEX))).toEqual(['canary/local/forward/effect/1']);
   });
 
   it('marks and clears one obligation without losing the others', async () => {

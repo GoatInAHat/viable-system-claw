@@ -7,7 +7,7 @@ import { planAllocation } from './compute/index.js';
 import { fromNativeEvent, fromSessionSend, metadataId, type Observation } from './backend/events.js';
 import { buildRuntime, ensureRootState, nativeExecutorFor, readRuntimeConfig } from './runtime.js';
 import type { AuthorityFence } from './execution/types.js';
-import { clearPending, markPending, resultPayloadRef, retentionRecordKey, retryPendingResults } from './retention.js';
+import { clearPending, markPending, resultPayloadRef, retentionRecordKey, retryPendingResults, RETENTION_MAX_ATTEMPTS } from './retention.js';
 import { emptyVsmSnapshot, projectVsmSnapshot } from './backend/vsm-snapshot.js';
 import { readDocument, VSM_DOCUMENT_KEY } from './vsm/state.js';
 
@@ -53,6 +53,9 @@ const plugin = defineFeaturePlugin({
         ? api.runtime.state.openKeyedStoreV2({ namespace: 'vsm-private', retention: 'retained' })
         : undefined;
       const fence: AuthorityFence = {};
+      // In-process retention fallback for the case where the store rejects even the
+      // pending-record write. Same-process only; documented as a bound.
+      const memoryPending = new Map<string, { effectId: string; runId: string; sessionKey: string; attempts: number; lastAt: number }>();
       const storeResultPayload = async (result: { ref: string; effectId: string; runId: string;
         sessionKey: string; messages: unknown[]; terminalReply?: unknown; truncated: boolean }) => {
         const observed = await privateStore!.observe(result.ref);
@@ -89,6 +92,22 @@ const plugin = defineFeaturePlugin({
             now: clock,
             log: detail => api.logger.warn(`VSC retention ${detail}`),
           });
+          for (const pending of [...memoryPending.values()]) {
+            try {
+              const existing = await privateStore!.observe(resultPayloadRef(pending.effectId, pending.runId));
+              if (existing.value !== undefined) { memoryPending.delete(pending.effectId); continue; }
+              const history = await api.runtime.subagent.getSessionMessages({ sessionKey: pending.sessionKey, limit: 10 });
+              const messages = Array.isArray(history.messages) ? history.messages : [];
+              await storeResultPayload({ ref: resultPayloadRef(pending.effectId, pending.runId),
+                effectId: pending.effectId, runId: pending.runId, sessionKey: pending.sessionKey,
+                messages, truncated: false });
+              memoryPending.delete(pending.effectId);
+            } catch {
+              const attempts = pending.attempts + 1;
+              if (attempts >= RETENTION_MAX_ATTEMPTS) memoryPending.delete(pending.effectId);
+              else memoryPending.set(pending.effectId, { ...pending, attempts, lastAt: clock() });
+            }
+          }
         } : undefined,
         executor: nativeExecutorFor(api, clock, {
           store: vsmStore, privateStore, agentId: runtimeConfig.agentId, fence,
@@ -100,13 +119,19 @@ const plugin = defineFeaturePlugin({
               for (let attempt = 0; ; attempt++) {
                 try {
                   await storeResultPayload(result);
+                  memoryPending.delete(result.effectId);
                   const existing = await privateStore!.observe(retentionRecordKey(result.effectId));
                   if (existing.value !== undefined && existing.value !== null) await clearPending(privateStore!, result.effectId);
                   return;
                 } catch (error) {
                   if (attempt >= 1) {
+                    // Same-process fallback even if the store cannot accept the record; the
+                    // durable record is preferred because it survives a restart.
+                    memoryPending.set(result.effectId, { effectId: result.effectId, runId: result.runId,
+                      sessionKey: result.sessionKey, attempts: 0, lastAt: clock() });
                     await markPending(privateStore!, { effectId: result.effectId, runId: result.runId,
-                      sessionKey: result.sessionKey, attempts: 0, lastAt: clock() }).catch(() => undefined);
+                      sessionKey: result.sessionKey, attempts: 0, lastAt: clock() })
+                      .catch(() => api.logger.warn('VSC retention record could not be persisted'));
                     throw error;
                   }
                 }
