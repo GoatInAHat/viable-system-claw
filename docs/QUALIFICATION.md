@@ -148,7 +148,7 @@ Review 3 (.agents/local/astra-review-3.md) found two defects in the claims of Pa
 - The host admission callback was not actually forwarded: production constructed the executor without assertCurrent, so the host never received it. The adapter also checked authority only before the private-intent read, so a revocation committed during that read was missed. Production now forwards assertCurrent, and the adapter re-checks admission after resolveIntent. A test drives the re-check.
 - The launch probe treated an empty transcript as proof of absence, so an uncertain first launch could be treated as no launch. A committed marker now yields unknown; absence comes only from durable knowledge or an authoritative rejection.
 
-Parts 4 to 6 should be read with this correction; the earlier text described intent rather than observed behavior for the host callback.
+Parts 4 to 6 should be read with this correction; the earlier text described intent rather than observed behavior for the host callback. Review 3 follow-up later found that even the forwarded callback validates cached authority when a revocation commits between the final durable read and the synchronous host callback (host dependency 5).
 
 ## Part 7: review-3 defect fixes
 
@@ -166,3 +166,18 @@ Commit db897b6 makes snapshot coverage explicit: every section carries total/ret
 **Evidence.** 260 tests pass; tsc --noEmit and plugin validation pass. Review 3 re-verification is in progress in the retained reviewer session.
 
 **Still open from review 3.** Result retention is best-effort: a sink failure freezes an unavailable payload with the terminal outcome and restart does not rediscover it. History is still one monolithic document with a finite retained-effect bound and no replay watermark. Authenticated runtime mutations, acknowledged principal delivery, compute stewardship, recursive adoption and measured diagnostic correctness are unchanged. See docs/HOST-DEPENDENCIES.md.
+
+## Part 8: review-3 follow-up verification
+
+Astra re-verified the fixes in the retained reviewer session against b7840ed and reported (addendum in .agents/local/astra-review-3.md):
+
+- Admission fence: the original intent-read race is closed (zero launches, effect lost). The separate window where a revocation commits after the adapter final read but before the host synchronous callback remains; the callback exists but validates cached authority. Recorded as host dependency 5.
+- Empty-history absence: closed. The uncertain launch stays ambiguous with one launch attempt and a durable unresolved-launch alarm.
+- Transient audit fault: closed, including the sampler-fault path.
+- Whitespace replies: closed (failed, value 0, payload retained, environment return).
+- Result CAS: closed for the reported conflict subcase. Failed payload writes still do not retry beyond the terminal outcome; a single transient retry was added in a215608, and persistent retention failure remains open.
+- Improvement duplicates: closed within one plugin process.
+
+Astra also ran the suite independently: 260 tests across 16 files, TypeScript 0 diagnostics.
+
+**Still open after review 3.** Persistent result-retention recovery, monolithic history bounds and replay watermark, authenticated runtime mutations and acknowledged principal delivery, compute stewardship, recursive adoption, and measured diagnostic correctness. These need either host capabilities (HOST-DEPENDENCIES 1-5) or new mechanisms.

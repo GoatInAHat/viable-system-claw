@@ -17,3 +17,9 @@ The kernel keeps an accepted external run alive after revocation and refuses new
 ## 4. Principal alarm delivery and acknowledgment
 
 The plugin can raise a durable alarm and emit a native feature event once. It cannot reach the principal outside the Gateway process, and no acknowledgment operation exists yet on the public contract. Delivery with durable acknowledgment needs either a host notification route owned by the principal or a new authenticated `vsm.alarm.ack` operation backed by the kernel principal role.
+
+## 5. Asynchronous authority assertion at host admission
+
+OpenClaw forwards a plugin-supplied `assertCurrent` callback into the subagent admission path, but the callback signature is synchronous (`() => void`). A synchronous callback can only validate the last committed state the plugin holds. If a revocation commits to durable storage after the adapter final read and before the host calls the callback, the callback approves stale authority. Review 3 reproduced exactly that ordering.
+
+Closing it needs one of: an awaitable assertion at the host admission boundary, a host-side revocation fence that reads durable authority itself, or serialization of revocation and launch through one durable lock. The plugin cannot close the window from inside a synchronous callback. The durable-state re-check after the intent read does close the earlier timing (revocation during the intent read).
