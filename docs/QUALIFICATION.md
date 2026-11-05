@@ -181,3 +181,15 @@ Astra re-verified the fixes in the retained reviewer session against b7840ed and
 Astra also ran the suite independently: 260 tests across 16 files, TypeScript 0 diagnostics.
 
 **Still open after review 3.** Persistent result-retention recovery, monolithic history bounds and replay watermark, authenticated runtime mutations and acknowledged principal delivery, compute stewardship, recursive adoption, and measured diagnostic correctness. These need either host capabilities (HOST-DEPENDENCIES 1-5) or new mechanisms.
+
+## Part 9: durable result-retention obligation
+
+Review 3 confirmed that a private sink failure froze an unavailable payload with the terminal outcome and no later pass reattempted it. Commit 12aa0cd separates retention from execution terminality:
+
+- The sink makes one bounded inline retry; on a second failure it records a pending obligation (effectId, runId, sessionKey, attempts, lastAt) and a bounded index entry.
+- Every reconciliation pass runs retryPendingResults: it refetches that session messages and rewrites the payload at the canonical ref, clears the record and the index entry on success, increments attempts on failure, and stops after 64 attempts with the record kept for an operator.
+- Execution stays immutable; this obligation is separate and bounded (32 effects, 64 attempts).
+
+**Evidence.** 264 tests across 17 files pass, including four retention tests (index bound/dedupe, mark/clear isolation, retry-then-retain, exhaustion). tsc --noEmit and plugin validation pass. Astra confirmed the one-shot case at a215608 (2 attempts, 1 retained payload, succeeded with environment return) and the persistent case there still lost the payload; the durable obligation is now awaiting its re-verification.
+
+**Bound.** Retry depends on the host session history still being readable. If the transcript is gone, attempts exhaust and the record remains for an operator rather than claiming a stored payload.
