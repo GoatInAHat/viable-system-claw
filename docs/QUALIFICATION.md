@@ -115,3 +115,16 @@ Commit 22050b7 closes the top-ranked review finding (.agents/local/astra-review-
 - The tool-free run still returns a visible terminal reply, and the contrast is measurable: the qual-8 (tools available) reply reported sampled numbers (load ~4.8-5.1, memory 10.9/15.4 GB used, root filesystem 95% used), while the qual-9 tool-free reply is a status line with no measurements (Host vado ... responsive for canary/local/forward/effect/1 - no anomalies observed). The model no longer had tools, and the run still satisfied the evaluated-outcome rule.
 
 **Not claimed.** A revocation is not a cancel/drain of accepted work (the kernel explicitly keeps accepted external runs alive). The fence narrows the launch race to the host own admission call; it is not a distributed lock. Surface restrictions remain unenforced for any purpose that needs them, which is why such a grant is refused rather than weakened silently.
+
+## Part 5: return-deadline audit and durable audit delivery
+
+Commit 64aa6dd closes the remaining production half of review finding 6. The periodic pass now schedules one durable audit.inspect per effect and return deadline:
+
+- Only effects in reserved, accepted or ambiguous with no environment return are inspected.
+- The source event id is audit/<effectId>/<returnDueAt>, so a restart cannot create a second finding for the same deadline, and an in-process set prevents re-applying the same inspect every 30 seconds.
+- Findings created by the reducer (missing-return at the deadline, outcome-residual at the outcome) flow to the new audit sink, which delivers each finding id once per process and logs bounded metadata only (id, kind, residual). No private bodies.
+- An improvement-candidate sink now carries the repeated alarm class and its count. Neither signal is authorization to spend inference.
+
+**Evidence.** 256 tests pass (one new runtime test drives a stalled accepted run past its return deadline, asserts exactly one missing-return finding, asserts the sink delivered it once, and asserts a second pass does not re-deliver); tsc --noEmit passes; plugin validation passes. Fresh disposable Gateway /tmp/vsc-qual-11: effect 1 completed succeeded with outcome 1 and a correlated environment return, channel re-armed to evidence, no audit findings (correct negative case: the run returned before its deadline), no alarm, no authority or capability rejection in the log.
+
+**Not claimed.** Audit findings do not yet reach the principal through a durable acknowledged channel; the sink is an operator log signal. Acknowledgment and escalation remain open.
