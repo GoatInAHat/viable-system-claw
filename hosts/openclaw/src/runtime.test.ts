@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildRuntime, CANARY_CHANNEL, DISPATCH_CHANNEL, PROBE_PROCEDURE, ensureRootState, readRuntimeConfig } from './runtime.js';
+import { buildRuntime, CANARY_CHANNEL, DISPATCH_CHANNEL, PROBE_PROCEDURE, ensureRootState, nativeExecutorFor, readRuntimeConfig } from './runtime.js';
 import { readDocument, type DocumentStore } from './vsm/state.js';
 import { intentKey } from './vsm/intent-store.js';
 import type { NativeExecutor } from './vsm/executor.js';
@@ -244,6 +244,28 @@ describe('canary runtime', () => {
     expect(audits).toEqual([`${effectId}/audit/missing-return`]);
     await runtime.reconcileOnce();
     expect(audits).toHaveLength(1);
+    await runtime.stop();
+  });
+
+  it('keeps a proven absent launch absent across the periodic reconciliation pass', async () => {
+    const store = new MemoryStore();
+    const privateStore = new MemoryStore();
+    const config = { ...base, agentId: 'canary' };
+    await ensureRootState(store, config, 10);
+    const refusing: NativeExecutor = {
+      async dispatch() { return { status: 'not-launched' }; },
+      async reconcile() { return { status: 'unknown' }; },
+    };
+    const runtime = buildRuntime({ config, store, privateStore, executor: refusing, clock: () => 100, sampler: faulty });
+    await runtime.start();
+    await runtime.sampleOnce();
+    const effectId = Object.keys(runtime.service.state.effects)[0];
+    expect(runtime.service.state.effects[effectId].status).toBe('lost');
+    const api = { runtime: { subagent: { run: async () => ({ runId: 'x' }),
+      waitForRun: async () => ({ status: 'pending' as const }),
+      getSessionMessages: async () => ({ messages: [] }) } } };
+    const native = nativeExecutorFor(api as never, () => 120, { store, privateStore, agentId: 'canary' });
+    expect(await native.reconcile({ effectId, nativeId: null })).toEqual({ status: 'not-launched' });
     await runtime.stop();
   });
 

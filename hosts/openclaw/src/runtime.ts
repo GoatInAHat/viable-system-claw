@@ -377,6 +377,13 @@ export function nativeExecutorFor(
       return { value: ok ? 1 : 0, success: ok };
     },
     probeLaunch: async request => {
+      // Durable knowledge beats a fresh guess: a reservation already proven absent stays
+      // absent instead of being degraded back to ambiguity by the periodic pass.
+      if (options.store) {
+        const observed = await options.store.observe(VSM_DOCUMENT_KEY);
+        const known = readDocument(observed.value)?.state.effects[request.effectId];
+        if (known?.status === 'lost') return 'absent';
+      }
       if (!options.privateStore) return 'unknown';
       const marker = await readIntent(options.privateStore, request.effectId);
       if (!marker) return 'unknown';
